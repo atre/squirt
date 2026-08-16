@@ -1,10 +1,23 @@
 # squirt
 
+[![CI](https://github.com/atre/squirt/actions/workflows/ci.yml/badge.svg)](https://github.com/atre/squirt/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Log triage compressor. Pipe in thousands of raw log lines, get back a ~20-line
 digest: unique message templates with counts, severity, a time sparkline, and
 first/last-seen.
 Built so an AI session (or a human) reads the digest instead of the firehose —
 2,000 lines become 20, and the rare error buried on page 7 surfaces to the top.
+
+## Install
+
+Node ≥ 20. Straight from GitHub (not on npm):
+
+```bash
+npm install -g github:atre/squirt
+```
+
+Or from source: `git clone … && cd squirt && npm install && npm link`.
 
 ## Usage
 
