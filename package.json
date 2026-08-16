@@ -15,7 +15,7 @@
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
     "prelink": "npm run build",
-    "test": "tsc -p tsconfig.test.json && node --test test-dist/test/**/*.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test test-dist/test/*.test.js",
     "lint": "tsc --noEmit"
   },
   "keywords": [
