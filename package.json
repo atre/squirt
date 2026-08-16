@@ -1,6 +1,6 @@
 {
   "name": "squirt",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Log triage compressor — cluster raw logs into a compact signature digest",
   "type": "module",
   "bin": {
