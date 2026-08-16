@@ -1,6 +1,6 @@
 import { SEVERITY } from './cluster.js';
 import { renderText, sparkBuckets, type RenderOptions } from './render.js';
-import type { ClusterResult, Signature } from './types.js';
+import type { ClusterResult, Level, Signature } from './types.js';
 
 export type Baseline = Pick<Signature, 'template' | 'level' | 'count'>[];
 
@@ -61,6 +61,36 @@ export function renderDiffText(d: DiffResult, opts: RenderOptions, label: string
   return [head, ...body].join('\n');
 }
 
+/** Fleet Finding shape for new ERROR/WARN signatures — `pulse diff` / `/ship` step 2. */
+export interface Finding {
+  id: string;
+  scope: 'log';
+  severity: 'crit' | 'warn';
+  title: string;
+  detail: string;
+  hint: string;
+}
+
+const FINDING_SEVERITY: Partial<Record<Level, 'crit' | 'warn'>> = { ERROR: 'crit', WARN: 'warn' };
+
+export function toFindings(d: DiffResult, label: string): Finding[] {
+  const findings: Finding[] = [];
+  for (const e of d.entries) {
+    if (e.change !== 'new') continue;
+    const severity = FINDING_SEVERITY[e.level];
+    if (!severity) continue;
+    findings.push({
+      id: `log:${e.id}`,
+      scope: 'log',
+      severity,
+      title: `${e.template.slice(0, 80)} ×${e.count} (new since ${label})`,
+      detail: e.sample,
+      hint: `squirt --show ${e.id}`,
+    });
+  }
+  return findings;
+}
+
 export function renderDiffJson(d: DiffResult, opts: RenderOptions, label: string): string {
   return JSON.stringify(
     {
@@ -69,10 +99,11 @@ export function renderDiffJson(d: DiffResult, opts: RenderOptions, label: string
       unchanged: d.unchanged,
       gone: d.gone,
       changes: d.entries.slice(0, opts.top).map((e) => {
-        const { hist: _hist, ...rest } = e;
+        const { hist: _hist, novel: _novel, ...rest } = e;
         const spark = sparkBuckets(e, d.after);
         return spark ? { ...rest, spark } : rest;
       }),
+      findings: toFindings(d, label),
     },
     null,
     2,

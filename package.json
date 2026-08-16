@@ -6,6 +6,10 @@
   "bin": {
     "squirt": "./dist/index.js"
   },
+  "exports": {
+    ".": "./dist/lib.js"
+  },
+  "types": "./dist/lib.d.ts",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -16,6 +20,7 @@
     "prepublishOnly": "npm run build",
     "prelink": "npm run build",
     "test": "tsc -p tsconfig.test.json && node --test test-dist/test/*.test.js",
+    "test:perf": "tsc -p tsconfig.test.json && node --test test-dist/test/perf/*.test.js",
     "lint": "tsc --noEmit"
   },
   "keywords": [

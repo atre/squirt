@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mask } from './mask.js';
 import type { ClusterOptions, ClusterResult, Level, Signature, TaggedLine, TimeRange } from './types.js';
 
@@ -21,6 +22,14 @@ const DETAIL = /^\s*(Caused by:|[\w.]*(Error|Exception):)/;
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 // kubectl logs --prefix: "[pod/api-7f9/app] msg" (also "[pod/api-7f9] msg").
 const POD_PREFIX = /^\[pod\/([^\/\]\s]+)(?:\/[^\]\s]+)?\]\s+/;
+// logfmt key=value token: bare word or a quoted string (escapes allowed).
+const KV_RE = /(\w[\w.-]*)=("(?:[^"\\]|\\.)*"|\S+)/;
+
+// Hard per-line cap: base64 dumps / minified stacks stay linear through masking.
+const MAX_LINE = 4000;
+// Pretty-printed JSON objects span multiple lines; cap so a stream that never
+// closes its braces doesn't buffer forever.
+const MAX_JSON_BUF = 200;
 
 const LEVEL_MAP: Record<string, Level> = {
   FATAL: 'ERROR',
@@ -51,6 +60,11 @@ export function toEpoch(ts: string): number | undefined {
   return Number.isNaN(t) ? undefined : t;
 }
 
+/** Stable signature id: sha1(`${level} ${template}`), 4 hex chars. */
+export function sigId(level: Level, template: string): string {
+  return createHash('sha1').update(`${level} ${template}`).digest('hex').slice(0, 4);
+}
+
 interface Parsed {
   ts?: string;
   level: Level;
@@ -76,7 +90,8 @@ function pick(obj: Record<string, unknown>, keys: string[]): unknown {
 }
 
 // JSON-lines (pino, bunyan, zap, logrus, slog, structlog…): trust the fields
-// instead of regex-guessing, and drop the envelope from the template.
+// instead of regex-guessing, and drop the envelope from the template. Also
+// handles pretty-printed objects joined across lines by the caller.
 function parseJson(raw: string): Parsed | undefined {
   if (raw[0] !== '{' || raw[raw.length - 1] !== '}') return undefined;
   let obj: unknown;
@@ -118,6 +133,33 @@ function parseJson(raw: string): Parsed | undefined {
   return { ts, level, message };
 }
 
+// logfmt (level=info msg="…" dur=12ms): a line is logfmt when it starts with
+// ≥2 contiguous key=value pairs. level|lvl and time|ts are lifted out; the
+// rest stays in order as the message, quotes and all (mask() handles them).
+function parseLogfmt(raw: string): Parsed | undefined {
+  const pairs: { key: string; raw: string }[] = [];
+  let idx = 0;
+  while (idx < raw.length) {
+    const m = KV_RE.exec(raw.slice(idx));
+    if (!m || m.index !== 0) break;
+    pairs.push({ key: m[1], raw: m[0] });
+    idx += m[0].length;
+    while (raw[idx] === ' ') idx++;
+  }
+  if (pairs.length < 2) return undefined;
+
+  let level: Level = 'OTHER';
+  let ts: string | undefined;
+  const rest: string[] = [];
+  for (const p of pairs) {
+    const val = p.raw.slice(p.key.length + 1);
+    if ((p.key === 'level' || p.key === 'lvl') && level === 'OTHER') level = levelFromString(val) ?? 'OTHER';
+    else if ((p.key === 'time' || p.key === 'ts') && ts === undefined) ts = val.replace(/^"|"$/g, '');
+    else rest.push(p.raw);
+  }
+  return { ts, level, message: rest.join(' ') };
+}
+
 function parseText(raw: string): Parsed {
   const tsMatch = TS_PREFIX.exec(raw);
   const ts = tsMatch?.[1];
@@ -135,6 +177,60 @@ function parseText(raw: string): Parsed {
   return { ts, level, message: rest };
 }
 
+function tokenize(template: string): string[] {
+  return template.split(' ');
+}
+
+const isPlaceholder = (t: string): boolean => /^<.*>$/.test(t);
+
+// Merge near-duplicate templates (same level, ≤2 tokens differ) — opt-in
+// (`--fuzzy`), bounded to the top 50 signatures per level (O(k²) on that).
+function mergeNear(signatures: Signature[]): Signature[] {
+  const byLevel = new Map<Level, Signature[]>();
+  for (const s of signatures) {
+    const arr = byLevel.get(s.level);
+    if (arr) arr.push(s);
+    else byLevel.set(s.level, [s]);
+  }
+  const removed = new Set<Signature>();
+
+  for (const sigs of byLevel.values()) {
+    const candidates = [...sigs].sort((a, b) => b.count - a.count).slice(0, 50);
+    for (let i = 0; i < candidates.length; i++) {
+      const a = candidates[i];
+      if (removed.has(a)) continue;
+      for (let j = i + 1; j < candidates.length; j++) {
+        const b = candidates[j];
+        if (removed.has(b)) continue;
+        const at = tokenize(a.template);
+        const bt = tokenize(b.template);
+        if (at.length !== bt.length) continue;
+        const diffIdx: number[] = [];
+        for (let k = 0; k < at.length && diffIdx.length <= 2; k++) if (at[k] !== bt[k]) diffIdx.push(k);
+        if (diffIdx.length === 0 || diffIdx.length > 2) continue;
+
+        const winner = a.count >= b.count ? a : b;
+        const loser = winner === a ? b : a;
+        const wt = tokenize(winner.template);
+        const lt = tokenize(loser.template);
+        for (const k of diffIdx) wt[k] = isPlaceholder(wt[k]) ? wt[k] : isPlaceholder(lt[k]) ? lt[k] : '<*>';
+        winner.template = wt.join(' ');
+        winner.count += loser.count;
+        winner.id = sigId(winner.level, winner.template);
+        if (loser.firstSeen && (!winner.firstSeen || loser.firstSeen < winner.firstSeen)) winner.firstSeen = loser.firstSeen;
+        if (loser.lastSeen && (!winner.lastSeen || loser.lastSeen > winner.lastSeen)) winner.lastSeen = loser.lastSeen;
+        if (loser.hist) {
+          if (!winner.hist) winner.hist = loser.hist;
+          else for (let h = 0; h < winner.hist.length; h++) winner.hist[h] += loser.hist[h];
+        }
+        removed.add(loser);
+        if (loser === a) break;
+      }
+    }
+  }
+  return signatures.filter((s) => !removed.has(s));
+}
+
 export async function cluster(
   lines: Iterable<string | TaggedLine> | AsyncIterable<string | TaggedLine>,
   opts: ClusterOptions = {},
@@ -142,6 +238,10 @@ export async function cluster(
   const groups = new Map<string, Signature>();
   const maxSamples = Math.max(1, opts.samples ?? 1);
   const extraMasks = opts.masks ?? [];
+  const sampleCap = opts.wide ? 2000 : 300;
+  const showLimit = opts.showLimit ?? 20;
+  const shown: string[] = [];
+  const firstEpoch = new Map<string, number>();
   let total = 0;
   let folded = 0;
   let last: Signature | undefined;
@@ -166,38 +266,30 @@ export async function cluster(
     return idx;
   };
 
-  for await (const line of lines) {
-    const tagged = typeof line === 'string' ? { text: line } : line;
-    let raw = tagged.text.trimEnd().replace(ANSI_SGR, '');
-    if (!raw.trim()) continue;
-    total++;
-
-    let source = tagged.source;
-    const podMatch = POD_PREFIX.exec(raw);
-    if (podMatch) {
-      source = podMatch[1];
-      raw = raw.slice(podMatch[0].length);
-    }
-
+  function handleRecord(raw: string, source: string | undefined): void {
     // JSON-lines never emit stack-trace continuations; an indented line after a
     // JSON record is a new (pretty-printed) record, not a fold target.
     if (last && !lastWasJson && CONTINUATION.test(raw)) {
       folded++;
       if (last.detail === undefined && DETAIL.test(raw)) last.detail = raw.trim().slice(0, 200);
-      continue;
+      return;
     }
 
     const json = parseJson(raw);
+    const logfmt = json ? undefined : parseLogfmt(raw);
     lastWasJson = json !== undefined;
-    const { ts, level, message } = json ?? parseText(raw);
+    const { ts, level, message } = json ?? logfmt ?? parseText(raw);
 
     const template = mask(message, extraMasks).replace(/\s+/g, ' ').trim().slice(0, 200);
     const key = `${level} ${template}`;
-    const sample = message.trim().slice(0, 300);
+    const id = sigId(level, template);
+    const sample = message.trim().slice(0, sampleCap);
+
+    if (opts.show && id === opts.show && shown.length < showLimit) shown.push(message.trim());
 
     let sig = groups.get(key);
     if (!sig) {
-      sig = { template, level, count: 0, sample };
+      sig = { id, template, level, count: 0, sample };
       if (source) sig.source = source;
       groups.set(key, sig);
     } else if (level === 'ERROR' && maxSamples > 1 && sample !== sig.sample) {
@@ -210,6 +302,7 @@ export async function cluster(
       sig.lastSeen = ts;
       const t = toEpoch(ts);
       if (t !== undefined) {
+        if (!firstEpoch.has(key)) firstEpoch.set(key, t);
         const idx = bucketOf(t);
         (sig.hist ??= new Array<number>(HIST_BUCKETS).fill(0))[idx]++;
       }
@@ -217,10 +310,89 @@ export async function cluster(
     last = sig;
   }
 
-  const signatures = [...groups.values()].sort(
-    (a, b) => SEVERITY[a.level] - SEVERITY[b.level] || b.count - a.count,
+  const countBraces = (s: string): number => {
+    let d = 0;
+    for (const ch of s) {
+      if (ch === '{') d++;
+      else if (ch === '}') d--;
+    }
+    return d;
+  };
+
+  let jsonBuf: { raw: string; source: string | undefined }[] | undefined;
+  let jsonDepth = 0;
+
+  for await (const line of lines) {
+    const tagged = typeof line === 'string' ? { text: line } : line;
+    let raw = tagged.text.trimEnd().replace(ANSI_SGR, '');
+    if (!raw.trim()) continue;
+    total++;
+
+    if (total === 1 && raw.includes('\0')) {
+      throw new Error('input looks binary (NUL byte in first line) — refusing to digest');
+    }
+    if (raw.length > MAX_LINE) raw = `${raw.slice(0, MAX_LINE)}…`;
+
+    let source = tagged.source;
+    const podMatch = POD_PREFIX.exec(raw);
+    if (podMatch) {
+      source = podMatch[1];
+      raw = raw.slice(podMatch[0].length);
+    }
+
+    if (jsonBuf) {
+      jsonBuf.push({ raw, source });
+      jsonDepth += countBraces(raw);
+      if (jsonDepth <= 0) {
+        const buf = jsonBuf;
+        jsonBuf = undefined;
+        handleRecord(
+          buf.map((b) => b.raw).join('\n'),
+          buf[0].source,
+        );
+      } else if (jsonBuf.length >= MAX_JSON_BUF) {
+        const buf = jsonBuf;
+        jsonBuf = undefined;
+        for (const b of buf) handleRecord(b.raw, b.source);
+      }
+      continue;
+    }
+
+    // A line that is (or ends with) an opening brace starts a pretty-printed
+    // JSON object — buffer until the braces balance.
+    if (raw.trim() === '{' || raw.endsWith('{')) {
+      jsonBuf = [{ raw, source }];
+      jsonDepth = countBraces(raw);
+      continue;
+    }
+
+    handleRecord(raw, source);
+  }
+  if (jsonBuf) {
+    const buf: { raw: string; source: string | undefined }[] = jsonBuf;
+    for (const b of buf) handleRecord(b.raw, b.source);
+  }
+
+  let signatures = [...groups.values()];
+  if (opts.fuzzy) signatures = mergeNear(signatures);
+
+  // Rare-signature promotion: a single ERROR occurrence in the last 5% of the
+  // stream is the thing that broke — bubble it above high-count noise.
+  if (time) {
+    const novelFloor = time.start + 0.95 * (time.end - time.start);
+    for (const sig of signatures) {
+      if (sig.level !== 'ERROR' || sig.count !== 1) continue;
+      const epoch = firstEpoch.get(`${sig.level} ${sig.template}`);
+      if (epoch !== undefined && epoch >= novelFloor) sig.novel = true;
+    }
+  }
+
+  signatures.sort(
+    (a, b) =>
+      SEVERITY[a.level] - SEVERITY[b.level] || (a.novel ? 0 : 1) - (b.novel ? 0 : 1) || b.count - a.count,
   );
   const result: ClusterResult = { lines: total, folded, signatures };
   if (time) result.time = time;
+  if (opts.show) result.shown = shown;
   return result;
 }

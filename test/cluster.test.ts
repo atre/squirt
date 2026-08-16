@@ -168,7 +168,7 @@ test('masks quoted strings and paths', () => {
 });
 
 test('renders day markers when the span crosses midnight', () => {
-  const base = { level: 'ERROR' as const, count: 2, template: 'x', sample: 'x' };
+  const base = { id: 'aaaa', level: 'ERROR' as const, count: 2, template: 'x', sample: 'x' };
   const iso = renderText(
     { lines: 2, folded: 0, signatures: [{ ...base, firstSeen: '2026-08-15T23:10:00Z', lastSeen: '2026-08-16T01:02:00Z' }] },
     20,
@@ -205,4 +205,78 @@ test('strips kubectl --prefix pod tags and records the first-seen pod', async ()
   assert.equal(result.folded, 1);
   assert.equal(result.signatures[0].source, 'api-7f9');
   assert.match(renderText(result, 20), /\n  ↳ \[api-7f9\] db timeout host=10\.0\.0\.1/);
+});
+
+// ── Phase 5 — parsing / robustness backlog ──────────────────────────────
+
+test('folds pretty-printed multi-line JSON into one signature', async () => {
+  const result = await cluster(['{', '  "level": "error",', '  "msg": "boom"', '}']);
+  assert.equal(result.signatures.length, 1);
+  assert.equal(result.signatures[0].level, 'ERROR');
+  assert.equal(result.signatures[0].template, 'boom');
+  assert.equal(result.lines, 4);
+  assert.equal(result.folded, 0);
+});
+
+test('multi-line JSON that never closes its braces overflows instead of buffering forever', async () => {
+  const lines = ['{', '  "a": {'];
+  for (let i = 0; i < 199; i++) lines.push(`  "k${i}": ${i},`);
+  const result = await cluster(lines);
+  // overflow flushes the buffer through the normal per-line pipeline (which
+  // folds the indented fragments as continuations) rather than buffering forever
+  assert.equal(result.lines, lines.length);
+  assert.ok(result.folded > 0);
+});
+
+test('parses logfmt: lifts level/ts, masks the rest as key=value', async () => {
+  const result = await cluster([
+    'level=info ts=2026-08-16T09:00:00Z msg="user login" user=alice dur=12ms',
+    'level=info ts=2026-08-16T09:00:05Z msg="user login" user=bob dur=40ms',
+  ]);
+  assert.equal(result.signatures.length, 1);
+  const sig = result.signatures[0];
+  assert.equal(sig.level, 'INFO');
+  assert.equal(sig.template, 'msg=<str> user=<v> dur=<n>ms');
+  assert.equal(sig.firstSeen, '2026-08-16T09:00:00Z');
+});
+
+test('rare-signature promotion: a lone late ERROR bubbles above high-count noise', async () => {
+  const lines: string[] = [];
+  for (let m = 0; m < 60; m++) lines.push(`2026-08-16T09:${String(m).padStart(2, '0')}:00Z ERROR db timeout`);
+  lines.push('2026-08-16T09:59:30Z ERROR disk full');
+  const result = await cluster(lines);
+  assert.equal(result.signatures[0].template, 'disk full');
+  assert.equal(result.signatures[1].count, 60);
+});
+
+test('--fuzzy merges near-duplicate templates (same level, ≤2 tokens differ)', async () => {
+  const lines = ['ERROR job alpha failed', 'ERROR job beta failed', 'ERROR job alpha failed'];
+  const fuzzy = await cluster(lines, { fuzzy: true });
+  assert.equal(fuzzy.signatures.length, 1);
+  assert.equal(fuzzy.signatures[0].count, 3);
+  assert.equal(fuzzy.signatures[0].template, 'job <*> failed');
+  const strict = await cluster(lines);
+  assert.equal(strict.signatures.length, 2);
+});
+
+test('caps huge single lines before masking', async () => {
+  const start = performance.now();
+  const result = await cluster([`ERROR ${'A'.repeat(200_000)}`]);
+  assert.ok(performance.now() - start < 200);
+  assert.ok(result.signatures[0].template.length <= 200);
+});
+
+test('rejects binary input (NUL byte in the first line)', async () => {
+  await assert.rejects(cluster(['\0\x01\x02 binary']), /looks binary/);
+});
+
+test('mask: sha256 prefix, short hex ids, base64 blobs, mid-message timestamps', () => {
+  assert.equal(mask(`img sha256:${'a'.repeat(64)}`), 'img <sha>');
+  assert.equal(mask('tok cafe12 word facade'), 'tok <hex> word facade');
+  assert.equal(mask('blob QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0MTIz'), 'blob <b64>');
+  assert.equal(mask('token expired at 2026-08-16T09:14:02Z, retry'), 'token expired at <ts>, retry');
+  assert.equal(
+    mask('peer 2001:db8::1 and [::1]:8080 and 2001:0db8:0000:0000:0000:ff00:0042:8329 at 09:14:02 std::string'),
+    'peer <ip> and [<ip>]:<n> and <ip> at <n>:<n>:<n> std::string',
+  );
 });

@@ -1,6 +1,8 @@
 export type Level = 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'OTHER';
 
 export interface Signature {
+  /** Stable id: 4 hex chars, sha1(`${level} ${template}`). */
+  id: string;
   template: string;
   level: Level;
   count: number;
@@ -15,6 +17,8 @@ export interface Signature {
   source?: string;
   /** Fine-grained time histogram (internal; rendered as a sparkline). */
   hist?: number[];
+  /** Single ERROR occurrence in the last 5% of the stream (internal; sort-order only). */
+  novel?: boolean;
 }
 
 export interface TimeRange {
@@ -31,6 +35,8 @@ export interface ClusterResult {
   folded: number;
   signatures: Signature[];
   time?: TimeRange;
+  /** Raw lines behind `ClusterOptions.show`'s signature id, up to `showLimit`. */
+  shown?: string[];
 }
 
 /** A line with optional provenance (file basename, container…). */
@@ -44,4 +50,12 @@ export interface ClusterOptions {
   masks?: RegExp[];
   /** Keep up to this many distinct samples for ERROR signatures (default 1). */
   samples?: number;
+  /** Longer sample cap (2000 chars instead of 300) — humans reading `--wide`. */
+  wide?: boolean;
+  /** Merge near-duplicate templates (same level, ≤2 tokens differ) — opt-in. */
+  fuzzy?: boolean;
+  /** Dump raw lines behind this signature id instead of clustering. */
+  show?: string;
+  /** Max raw lines to collect for `show` (default 20). */
+  showLimit?: number;
 }

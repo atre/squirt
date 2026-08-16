@@ -9,8 +9,12 @@ export interface RenderOptions {
   grep?: RegExp;
   /** Approximate token budget (chars/4); the digest shrinks to fit. */
   tokens?: number;
+  /** Max output lines; the digest shrinks to fit, same degrade ladder as `tokens`. */
+  maxLines?: number;
   /** Text inserted before the count, e.g. "+" for new signatures in a diff. */
   mark?: (sig: Signature) => string;
+  /** Drop the `↳ sample` line entirely (⤷ detail still shows). */
+  noSample?: boolean;
 }
 
 const SPARK_COLS = 10;
@@ -80,10 +84,22 @@ export function filterSignatures(result: ClusterResult, opts: RenderOptions): { 
   return { visible, total: result.signatures.length };
 }
 
+/** True when any visible signature is at `level` or worse — `--fail-on`. */
+export function shouldFail(result: ClusterResult, level: Level): boolean {
+  const max = SEVERITY[level];
+  return result.signatures.some((s) => SEVERITY[s.level] <= max);
+}
+
 interface Layout {
   top: number;
   samples: 'all' | 'error' | 'none';
   detail: boolean;
+}
+
+function pct(count: number, lines: number): string {
+  if (lines <= 0) return '';
+  const p = Math.round((count / lines) * 100);
+  return ` (${p === 0 ? '<1' : p}%)`;
 }
 
 function renderWith(result: ClusterResult, opts: RenderOptions, layout: Layout, note?: string): string {
@@ -96,8 +112,10 @@ function renderWith(result: ClusterResult, opts: RenderOptions, layout: Layout, 
   for (const sig of visible.slice(0, layout.top)) {
     const when = span(sig.firstSeen, sig.lastSeen);
     const sp = spark(sparkBuckets(sig, result));
-    out.push(`[${sig.level}] ${opts.mark?.(sig) ?? ''}×${sig.count}${when ? `  ${when}` : ''}${sp ? `  ${sp}` : ''}  ${sig.template}`);
-    const showSample = layout.samples === 'all' || (layout.samples === 'error' && sig.level === 'ERROR');
+    out.push(
+      `[${sig.level}] #${sig.id} ${opts.mark?.(sig) ?? ''}×${sig.count}${pct(sig.count, result.lines)}${when ? `  ${when}` : ''}${sp ? `  ${sp}` : ''}  ${sig.template}`,
+    );
+    const showSample = !opts.noSample && (layout.samples === 'all' || (layout.samples === 'error' && sig.level === 'ERROR'));
     if (showSample) {
       if (sig.source || sig.sample !== sig.template) out.push(`  ↳ ${sig.source ? `[${sig.source}] ` : ''}${sig.sample}`);
       for (const s of sig.samples ?? []) out.push(`  ↳ ${s}`);
@@ -116,7 +134,7 @@ const estimateTokens = (s: string): number => Math.ceil(s.length / 4);
 export function renderText(result: ClusterResult, opts: RenderOptions | number): string {
   const o: RenderOptions = typeof opts === 'number' ? { top: opts } : opts;
   const full: Layout = { top: o.top, samples: 'all', detail: true };
-  if (!o.tokens) return renderWith(result, o, full);
+  if (!o.tokens && !o.maxLines) return renderWith(result, o, full);
 
   // Budget mode: degrade in order of least information lost first —
   // non-error samples → shrink top (down to 3) → all samples → top 1.
@@ -129,13 +147,27 @@ export function renderText(result: ClusterResult, opts: RenderOptions | number):
     { top: 1, samples: 'none', detail: false },
   );
 
+  const fits = (s: string): boolean =>
+    (!o.tokens || estimateTokens(s) <= o.tokens) && (!o.maxLines || s.split('\n').length <= o.maxLines);
+
   let last = '';
   for (const c of candidates) {
-    const note = c === full ? undefined : `(fit to --tokens ${o.tokens})`;
+    const note = c === full ? undefined : o.tokens ? `(fit to --tokens ${o.tokens})` : `(fit to ${o.maxLines} lines)`;
     last = renderWith(result, o, c, note);
-    if (estimateTokens(last) <= o.tokens) return last;
+    if (fits(last)) return last;
   }
   return last;
+}
+
+/** Red-only, ≤10 lines, `''` when nothing at WARN+ — for hooks/CI line budgets. */
+export function renderBrief(result: ClusterResult): string {
+  const { visible } = filterSignatures(result, { top: Infinity, level: 'WARN' });
+  if (visible.length === 0) return '';
+  const rows = visible.slice(0, 9).map((sig) => {
+    const when = span(sig.firstSeen, sig.lastSeen);
+    return `[${sig.level}] #${sig.id} ×${sig.count}${when ? `  ${when}` : ''}  ${sig.template}`;
+  });
+  return [`${visible.length} signatures · ${result.lines} lines`, ...rows].join('\n');
 }
 
 export function renderJson(result: ClusterResult, opts: RenderOptions | number): string {
@@ -148,7 +180,7 @@ export function renderJson(result: ClusterResult, opts: RenderOptions | number):
       totalSignatures: total,
       time: result.time ? { start: new Date(result.time.start).toISOString(), end: new Date(result.time.end).toISOString() } : undefined,
       signatures: visible.slice(0, o.top).map((s) => {
-        const { hist: _hist, ...rest } = s;
+        const { hist: _hist, novel: _novel, ...rest } = s;
         const spark = sparkBuckets(s, result);
         return spark ? { ...rest, spark } : rest;
       }),

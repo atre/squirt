@@ -8,6 +8,11 @@ const RULES: Array<[RegExp, string]> = [
   [/(?<!\w)"[^"]{1,120}"|(?<!\w)'[^']{1,120}'/g, '<str>'],
   // Filesystem paths: two+ segments so a bare "/" or "a/b" version-ish tokens don't match.
   [/(?<![\w.])\/[\w.-]+(\/[\w.-]+)+/g, '<path>'],
+  // logfmt bare-word values (key=value, unquoted, starts with a letter).
+  [/(?<=\b\w+=)[A-Za-z][\w.:-]*/g, '<v>'],
+  // Full ISO datetime mid-message — before <ip>/<n> so it collapses to one token
+  // instead of fragmenting into <n>-<n>-<n>T<n>:<n>:<n>Z.
+  [/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, '<ts>'],
   [/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b/g, '<ip>'],
   // IPv6: full 8-group form, or any form containing "::". Times like 09:14:02
   // have neither, so they fall through to <n>. Bracketed [::1]:8080 keeps its brackets.
@@ -15,11 +20,19 @@ const RULES: Array<[RegExp, string]> = [
     /(?<![\w:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![\w:])/gi,
     '<ip>',
   ],
+  // sha256:<64 hex> prefix form — before <hex> so the whole token collapses.
+  [/\bsha256:[0-9a-f]{64}\b/gi, '<sha>'],
   // Require at least one letter so long decimals (epoch ms) stay <n>.
   [/\b(?=[0-9a-f]*[a-f])[0-9a-f]{12,}\b/gi, '<hex>'],
+  // Short hex ids (6-11 chars): need ≥1 digit AND ≥1 letter so real words
+  // (facade, decade) survive.
+  [/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,11}\b/gi, '<hex>'],
+  // Base64 blobs: need ≥1 digit AND ≥1 letter so plain words don't match.
+  [/(?<![\w+/=])(?=[A-Za-z0-9+/]*\d)(?=[A-Za-z0-9+/]*[A-Za-z])[A-Za-z0-9+/]{20,}={0,2}(?![\w+/=])/g, '<b64>'],
   // No \b: digit-to-letter is not a word boundary, and "250ms" must become "<n>ms".
-  // Dotted runs (1.2.3, 3.14) collapse to a single <n>.
-  [/\d+(\.\d+)*/g, '<n>'],
+  // Dotted runs (1.2.3, 3.14) collapse to a single <n>. Negative lookbehind stops
+  // it re-chewing digits inside an already-placed placeholder (e.g. "<b64>").
+  [/(?<!<[a-z0-9]{0,10})\d+(\.\d+)*/g, '<n>'],
 ];
 
 /** Mask variable parts of a line. `extra` rules (from `--mask`) run first and yield `<mask>`. */

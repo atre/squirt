@@ -42,6 +42,36 @@ test('cli: subcommands, flags, passthrough for sources', () => {
   assert.throws(() => parseArgs(argv('--tokens', '5')), /--tokens expects/);
 });
 
+test('cli: Phase 5/6 flags — wide, no-sample, fuzzy, show, limit, fail-on, format, brief, init, guard-stats', () => {
+  const d = parseArgs(argv('--wide', '--no-sample', '--fuzzy', '--show', 'a3f1', '--limit', '5', '--fail-on', 'error', '--format', 'md'));
+  assert.equal(d.flags.wide, true);
+  assert.equal(d.flags.noSample, true);
+  assert.equal(d.flags.fuzzy, true);
+  assert.equal(d.flags.show, 'a3f1');
+  assert.equal(d.flags.limit, 5);
+  assert.equal(d.flags.failOn, 'error');
+  assert.equal(d.flags.format, 'md');
+
+  assert.throws(() => parseArgs(argv('--format', 'md', '--json')), /--format/);
+  assert.throws(() => parseArgs(argv('--format', 'bogus')), /--format expects/);
+  assert.throws(() => parseArgs(argv('--brief', '--json')), /--brief/);
+
+  const i = parseArgs(argv('init', '--claude', '--global', '--print'));
+  assert.equal(i.command, 'init');
+  assert.equal(i.flags.claude, true);
+  assert.equal(i.flags.global, true);
+  assert.equal(i.flags.print, true);
+
+  const g = parseArgs(argv('guard-stats', '--since', '7d'));
+  assert.equal(g.command, 'guard-stats');
+  assert.equal(g.flags.since, '7d');
+
+  // --since is a squirt flag only for guard-stats; source commands still forward it verbatim
+  const k = parseArgs(argv('k8s', '-n', 'prod', 'deploy/api', '--since', '1h'));
+  assert.deepEqual(k.passthrough, ['-n', 'prod', 'deploy/api', '--since', '1h']);
+  assert.equal(k.flags.since, undefined);
+});
+
 test('sourceSpec builds the incantations and forwards args verbatim', () => {
   assert.deepEqual(sourceSpec('k8s', ['-n', 'prod', 'deploy/api', '--since', '1h']), {
     bin: 'kubectl',
@@ -94,8 +124,8 @@ test('sparkline: bucketed by time across the whole input, doubling widths on lon
   assert.equal(bs[9], 20, 'all of b lands in the last bucket');
   assert.equal(as[0], 100, 'all of a lands in the first bucket');
   const text = renderText(result, { top: 20 });
-  assert.match(text, /\[ERROR\] ×20  10:00  ▁▁▁▁▁▁▁▁▁█  b/);
-  assert.match(text, /\[INFO\] ×100  09:00→09:01  █▁▁▁▁▁▁▁▁▁  a/);
+  assert.match(text, /\[ERROR\] #[0-9a-f]{4} ×20 \(17%\)  10:00  ▁▁▁▁▁▁▁▁▁█  b/);
+  assert.match(text, /\[INFO\] #[0-9a-f]{4} ×100 \(83%\)  09:00→09:01  █▁▁▁▁▁▁▁▁▁  a/);
   const json = JSON.parse(renderJson(result, { top: 20 }));
   assert.equal(json.time.start, '2026-08-16T09:00:00.000Z');
   assert.deepEqual(json.signatures[0].spark, bs);
@@ -153,6 +183,37 @@ test('--tokens shrinks the digest to the budget', async () => {
   assert.equal(renderText(result, { top: 40, tokens: 100000 }), full);
 });
 
+test('stable signature ids: 4 hex chars, deterministic, shown in text and json', async () => {
+  const result = await cluster(LOG);
+  assert.match(result.signatures[0].id, /^[0-9a-f]{4}$/);
+  const again = await cluster(LOG);
+  assert.equal(again.signatures[0].id, result.signatures[0].id);
+  assert.match(renderText(result, { top: 20 }), /^\d+ signatures · \d+ lines\n\[ERROR\] #[0-9a-f]{4} ×3/);
+  assert.match(JSON.parse(renderJson(result, { top: 20 })).signatures[0].id, /^[0-9a-f]{4}$/);
+});
+
+test('--show dumps the raw lines behind one signature id', async () => {
+  const r = await cluster(LOG);
+  const id = r.signatures[0].id;
+  const shown = (await cluster(LOG, { show: id, showLimit: 2 })).shown!;
+  assert.equal(shown.length, 2); // LOG has 3 "db timeout" lines; capped at showLimit
+  assert.ok(shown.every((l) => l.startsWith('db timeout')));
+});
+
+test('--maxLines shrinks the digest to a line budget, same ladder as --tokens', async () => {
+  const lines: string[] = [];
+  for (let i = 0; i < 40; i++) lines.push(`ERROR failure kind${String.fromCharCode(65 + i)}`);
+  const result = await cluster(lines);
+  const tight = renderText(result, { top: 40, maxLines: 10 });
+  assert.ok(tight.split('\n').length <= 10, `got ${tight.split('\n').length} lines`);
+  assert.match(tight, /\(fit to 10 lines\)/);
+});
+
+test('lib: side-effect-free library entry exposes cluster/diff/renderText', async () => {
+  const lib = await import('../src/lib.js');
+  for (const k of ['cluster', 'diff', 'renderText'] as const) assert.equal(typeof lib[k], 'function');
+});
+
 // ── diff & snap ────────────────────────────────────────────────────────
 
 test('diff: new, grown, gone, unchanged', async () => {
@@ -167,14 +228,23 @@ test('diff: new, grown, gone, unchanged', async () => {
   assert.equal(d.unchanged, 2);
   const text = renderDiffText(d, { top: 20 }, 'before.log');
   assert.equal(text.split('\n')[0], '1 new · 1 grown · 1 gone · 2 unchanged  (vs before.log; after: 14 lines)');
-  assert.match(text, /\[ERROR\] \+×2  e/);
-  assert.match(text, /\[ERROR\] ×2→×10  b/);
+  assert.match(text, /\[ERROR\] #[0-9a-f]{4} \+×2 \(14%\)  e/);
+  assert.match(text, /\[ERROR\] #[0-9a-f]{4} ×2→×10 \(71%\)  b/);
   const json = JSON.parse(renderDiffJson(d, { top: 20 }, 'before.log'));
   assert.equal(json.changes.length, 2);
   assert.equal(json.gone[0].template, 'd');
 
+  // fleet Finding shape: only "new" signatures at ERROR/WARN produce a finding
+  assert.equal(json.findings.length, 1);
+  assert.match(json.findings[0].id, /^log:[0-9a-f]{4}$/);
+  assert.equal(json.findings[0].scope, 'log');
+  assert.equal(json.findings[0].severity, 'crit');
+  assert.equal(json.findings[0].title, 'e ×2 (new since before.log)');
+  assert.match(json.findings[0].hint, /^squirt --show [0-9a-f]{4}$/);
+
   const same = diff(before.signatures, before);
   assert.match(renderDiffText(same, { top: 20 }, 'x'), /nothing new\./);
+  assert.deepEqual(JSON.parse(renderDiffJson(same, { top: 20 }, 'x')).findings, []);
 });
 
 test('snap: save + load under SQUIRT_HOME, scoped', async () => {

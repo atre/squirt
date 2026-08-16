@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 
 import { createReadStream, existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseArgs, printHelp, printVersion, type Flags } from './cli.js';
 import { cluster } from './cluster.js';
 import { diff, renderDiffJson, renderDiffText, type Baseline } from './diff.js';
+import { guardStats, parseDuration } from './guard.js';
+import { cmdInit } from './init.js';
 import { compileMask } from './mask.js';
-import { parseLevel, renderJson, renderText, type RenderOptions } from './render.js';
+import { parseLevel, renderBrief, renderJson, renderText, shouldFail, type RenderOptions } from './render.js';
 import { defaultScope, loadSnapshot, saveSnapshot } from './snap.js';
 import { streamSource } from './sources.js';
 import type { ClusterOptions, ClusterResult, TaggedLine } from './types.js';
@@ -35,11 +39,19 @@ function renderOpts(flags: Flags): RenderOptions {
     level: flags.level ? parseLevel(flags.level) : undefined,
     grep: flags.grep ? new RegExp(flags.grep) : undefined,
     tokens: flags.tokens,
+    noSample: flags.noSample,
   };
 }
 
 function clusterOpts(flags: Flags): ClusterOptions {
-  return { masks: flags.mask.map(compileMask), samples: flags.sample };
+  return {
+    masks: flags.mask.map(compileMask),
+    samples: flags.sample,
+    wide: flags.wide,
+    fuzzy: flags.fuzzy,
+    show: flags.show,
+    showLimit: flags.limit,
+  };
 }
 
 const noStdin = (files: string[]): boolean => files.length === 0 && Boolean(process.stdin.isTTY);
@@ -50,11 +62,47 @@ async function main(): Promise<void> {
   if (flags.help) return printHelp();
   if (flags.version) return printVersion();
 
+  if (command === 'init') {
+    process.exitCode = cmdInit({ root: process.cwd(), global: flags.global, print: flags.print });
+    return;
+  }
+
+  if (command === 'guard-stats') {
+    const home = process.env.SQUIRT_HOME || join(homedir(), '.squirt');
+    const logPath = join(home, 'guard.log');
+    const text = existsSync(logPath) ? await readFile(logPath, 'utf8') : '';
+    const since = flags.since ?? '7d';
+    const n = guardStats(text, Date.now() - parseDuration(since));
+    console.log(`${n} log dumps prevented (${since})`);
+    return;
+  }
+
   const ropts = renderOpts(flags);
   const copts = clusterOpts(flags);
   const digest = async (input: AsyncIterable<string | TaggedLine>): Promise<ClusterResult> => cluster(input, copts);
   const print = (result: ClusterResult): void => {
-    console.log(flags.json ? renderJson(result, ropts) : renderText(result, ropts));
+    if (flags.show) {
+      const sig = result.signatures.find((s) => s.id === flags.show);
+      if (!sig) {
+        console.error(`squirt: no signature with id ${JSON.stringify(flags.show)}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`#${sig.id} ×${sig.count} ${sig.template}`);
+      for (const line of result.shown ?? []) console.log(line);
+      return;
+    }
+    if (flags.brief) {
+      const brief = renderBrief(result);
+      if (brief) console.log(brief);
+    } else if (flags.json) {
+      console.log(renderJson(result, ropts));
+    } else if (flags.format) {
+      console.log(`\`\`\`text\n${renderText(result, ropts)}\n\`\`\``);
+    } else {
+      console.log(renderText(result, ropts));
+    }
+    if (flags.failOn && shouldFail(result, parseLevel(flags.failOn))) process.exitCode = 1;
   };
 
   switch (command) {
@@ -115,6 +163,7 @@ async function main(): Promise<void> {
       }
       const d = diff(baseline, await digest(afterInput));
       console.log(flags.json ? renderDiffJson(d, ropts, label) : renderDiffText(d, ropts, label));
+      if (flags.failOn && shouldFail(d.after, parseLevel(flags.failOn))) process.exitCode = 1;
       return;
     }
   }
