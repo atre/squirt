@@ -2,7 +2,7 @@ import { SEVERITY } from './cluster.js';
 import { renderText, sparkBuckets, type RenderOptions } from './render.js';
 import type { ClusterResult, Level, Signature } from './types.js';
 
-export type Baseline = Pick<Signature, 'template' | 'level' | 'count'>[];
+export type Baseline = (Pick<Signature, 'template' | 'level' | 'count'> & { id?: string })[];
 
 /** A signature counts as "grown" when its count multiplied by this or more. */
 export const GROWTH_FACTOR = 3;

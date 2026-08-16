@@ -209,6 +209,16 @@ test('--maxLines shrinks the digest to a line budget, same ladder as --tokens', 
   assert.match(tight, /\(fit to 10 lines\)/);
 });
 
+test('renderBrief: red-only, ≤10 lines, no samples, empty below warn, honours top', async () => {
+  const { renderBrief } = await import('../src/render.js');
+  assert.equal(renderBrief(await cluster(['INFO ok'])), '');
+  const b = renderBrief(await cluster(LOG));
+  assert.ok(b.split('\n').length <= 10);
+  assert.match(b, /^\[ERROR\]/m);
+  assert.doesNotMatch(b, /↳/);
+  assert.equal(renderBrief(await cluster(LOG), 1).split('\n').length, 2); // header + 1 row
+});
+
 test('lib: side-effect-free library entry exposes cluster/diff/renderText', async () => {
   const lib = await import('../src/lib.js');
   for (const k of ['cluster', 'diff', 'renderText'] as const) assert.equal(typeof lib[k], 'function');
@@ -258,12 +268,17 @@ test('snap: save + load under SQUIRT_HOME, scoped', async () => {
     assert.ok(path.startsWith(home));
     const raw = JSON.parse(await readFile(path, 'utf8'));
     assert.equal(raw.scope, '/my/svc');
-    assert.deepEqual(raw.signatures, [
+    assert.deepEqual(raw.signatures.map(({ id: _id, ...s }: { id: string }) => s), [
       { template: 'a', level: 'ERROR', count: 1 },
       { template: 'b', level: 'WARN', count: 1 },
     ]);
+    assert.match(raw.signatures[0].id, /^[0-9a-f]{4}$/);
     const loaded = await loadSnapshot('pre', '/my/svc');
     assert.equal(loaded?.name, 'pre');
+    // pre-0.3.0 snapshot (no ids) gets ids derived on load
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(path, JSON.stringify({ ...raw, signatures: [{ template: 'a', level: 'ERROR', count: 1 }] }));
+    assert.equal((await loadSnapshot('pre', '/my/svc'))!.signatures[0].id, raw.signatures[0].id);
     assert.equal(await loadSnapshot('pre', '/other'), undefined);
     assert.throws(() => snapPath('../evil', 'x'), /snapshot name/);
   } finally {

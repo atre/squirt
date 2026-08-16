@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { VERSION } from './cli.js';
+import { sigId } from './cluster.js';
 import type { ClusterResult, Signature } from './types.js';
 
 export interface Snapshot {
@@ -11,7 +12,8 @@ export interface Snapshot {
   scope: string;
   savedAt: string;
   lines: number;
-  signatures: Pick<Signature, 'template' | 'level' | 'count'>[];
+  /** `id` absent in snapshots written before 0.3.0. */
+  signatures: (Pick<Signature, 'template' | 'level' | 'count'> & { id?: string })[];
 }
 
 const NAME_RE = /^[\w.-]{1,64}$/;
@@ -37,7 +39,7 @@ export async function saveSnapshot(name: string, scope: string, result: ClusterR
     scope,
     savedAt: new Date().toISOString(),
     lines: result.lines,
-    signatures: result.signatures.map(({ template, level, count }) => ({ template, level, count })),
+    signatures: result.signatures.map(({ id, template, level, count }) => ({ id, template, level, count })),
   };
   await mkdir(join(path, '..'), { recursive: true });
   await writeFile(path, `${JSON.stringify(snap, null, 2)}\n`);
@@ -53,5 +55,8 @@ export async function loadSnapshot(name: string, scope: string): Promise<Snapsho
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw e;
   }
-  return JSON.parse(text) as Snapshot;
+  const snap = JSON.parse(text) as Snapshot;
+  // Snapshots written before 0.3.0 have no ids — derive them so diff `gone[]` always carries one.
+  for (const s of snap.signatures) s.id ??= sigId(s.level, s.template);
+  return snap;
 }

@@ -159,11 +159,11 @@ export function renderText(result: ClusterResult, opts: RenderOptions | number):
   return last;
 }
 
-/** Red-only, ≤10 lines, `''` when nothing at WARN+ — for hooks/CI line budgets. */
-export function renderBrief(result: ClusterResult): string {
+/** Red-only, ≤10 lines, `''` when nothing at WARN+ — for hooks/CI line budgets. `top` caps rows below the ceiling. */
+export function renderBrief(result: ClusterResult, top = 9): string {
   const { visible } = filterSignatures(result, { top: Infinity, level: 'WARN' });
   if (visible.length === 0) return '';
-  const rows = visible.slice(0, 9).map((sig) => {
+  const rows = visible.slice(0, Math.min(9, top)).map((sig) => {
     const when = span(sig.firstSeen, sig.lastSeen);
     return `[${sig.level}] #${sig.id} ×${sig.count}${when ? `  ${when}` : ''}  ${sig.template}`;
   });

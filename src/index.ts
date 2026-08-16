@@ -93,7 +93,7 @@ async function main(): Promise<void> {
       return;
     }
     if (flags.brief) {
-      const brief = renderBrief(result);
+      const brief = renderBrief(result, flags.top);
       if (brief) console.log(brief);
     } else if (flags.json) {
       console.log(renderJson(result, ropts));

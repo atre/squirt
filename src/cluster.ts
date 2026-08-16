@@ -282,14 +282,13 @@ export async function cluster(
 
     const template = mask(message, extraMasks).replace(/\s+/g, ' ').trim().slice(0, 200);
     const key = `${level} ${template}`;
-    const id = sigId(level, template);
     const sample = message.trim().slice(0, sampleCap);
 
-    if (opts.show && id === opts.show && shown.length < showLimit) shown.push(message.trim());
-
     let sig = groups.get(key);
+    // sha1 only on first sight of a template — not once per line (hot path).
+    if (opts.show && (sig?.id ?? sigId(level, template)) === opts.show && shown.length < showLimit) shown.push(message.trim());
     if (!sig) {
-      sig = { id, template, level, count: 0, sample };
+      sig = { id: sigId(level, template), template, level, count: 0, sample };
       if (source) sig.source = source;
       groups.set(key, sig);
     } else if (level === 'ERROR' && maxSamples > 1 && sample !== sig.sample) {
