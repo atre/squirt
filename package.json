@@ -1,0 +1,51 @@
+{
+  "name": "squirt",
+  "version": "0.1.0",
+  "description": "Log triage compressor — cluster raw logs into a compact signature digest",
+  "type": "module",
+  "bin": {
+    "squirt": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "prestart": "npm run build",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build",
+    "prelink": "npm run build",
+    "test": "tsc -p tsconfig.test.json && node --test test-dist/test/**/*.test.js",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "logs",
+    "triage",
+    "clustering",
+    "digest",
+    "cli",
+    "drain",
+    "ai",
+    "claude"
+  ],
+  "license": "MIT",
+  "private": true,
+  "author": "Mykyta Herashchenko",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atre/squirt.git"
+  },
+  "homepage": "https://github.com/atre/squirt#readme",
+  "bugs": {
+    "url": "https://github.com/atre/squirt/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3"
+  }
+}
