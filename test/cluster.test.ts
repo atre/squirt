@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cluster } from '../src/cluster.js';
 import { mask } from '../src/mask.js';
+import { renderJson, renderText } from '../src/render.js';
 
 test('collapses repeated messages that differ only in variables', async () => {
   const result = await cluster([
@@ -116,4 +117,92 @@ test('accepts async iterables and skips blank lines', async () => {
   const result = await cluster(gen());
   assert.equal(result.lines, 2);
   assert.equal(result.signatures[0].count, 2);
+});
+
+// ── Phase 1.5 correctness ─────────────────────────────────────────────
+
+test('<hex> requires a letter: long decimals stay <n>', () => {
+  assert.equal(mask('ts 1755335820000 tok deadbeefdeadbeef'), 'ts <n> tok <hex>');
+});
+
+test('strips ANSI colour codes before parsing', async () => {
+  const result = await cluster(['\x1b[31mERROR\x1b[0m boom']);
+  assert.equal(result.signatures[0].level, 'ERROR');
+  assert.equal(result.signatures[0].template, 'boom');
+});
+
+test('does not fold continuation-looking lines after a JSON record', async () => {
+  const result = await cluster(['{"level":"error","msg":"x"}', '    at foo']);
+  assert.equal(result.signatures.length, 2);
+  assert.equal(result.folded, 0);
+});
+
+test('surfaces the first useful folded line as detail', async () => {
+  const result = await cluster([
+    '2026-08-16T09:00:00Z ERROR request failed',
+    '    at Object.run (/app/dist/worker.js:10:5)',
+    '    Caused by: ETIMEDOUT',
+    '    Caused by: something else',
+  ]);
+  const sig = result.signatures[0];
+  assert.equal(sig.detail, 'Caused by: ETIMEDOUT');
+  assert.equal(result.folded, 3);
+  const text = renderText(result, 20);
+  assert.match(text, /\n  ⤷ Caused by: ETIMEDOUT/);
+  assert.equal(JSON.parse(renderJson(result, 20)).signatures[0].detail, 'Caused by: ETIMEDOUT');
+});
+
+test('body-scan only assigns ERROR/WARN family levels', async () => {
+  const result = await cluster(['user asked for INFO x', 'reconnect after ERROR', 'DEBUG leading token ok']);
+  const byTemplate = Object.fromEntries(result.signatures.map((s) => [s.template, s.level]));
+  assert.equal(byTemplate['user asked for INFO x'], 'OTHER');
+  assert.equal(byTemplate['reconnect after ERROR'], 'ERROR');
+  assert.equal(byTemplate['leading token ok'], 'DEBUG');
+});
+
+test('masks quoted strings and paths', () => {
+  assert.equal(mask('open "/data/x1.json" failed'), 'open <str> failed');
+  assert.equal(mask('read /var/log/app.log'), 'read <path>');
+  assert.equal(mask("can't open 'x'"), "can't open <str>");
+  assert.equal(mask('ratio 1/2 and v1.2.3'), 'ratio <n>/<n> and v<n>');
+});
+
+test('renders day markers when the span crosses midnight', () => {
+  const base = { level: 'ERROR' as const, count: 2, template: 'x', sample: 'x' };
+  const iso = renderText(
+    { lines: 2, folded: 0, signatures: [{ ...base, firstSeen: '2026-08-15T23:10:00Z', lastSeen: '2026-08-16T01:02:00Z' }] },
+    20,
+  );
+  assert.match(iso, /08-15 23:10→08-16 01:02/);
+  const sameDay = renderText(
+    { lines: 2, folded: 0, signatures: [{ ...base, firstSeen: '2026-08-16T09:10:00Z', lastSeen: '2026-08-16T10:02:00Z' }] },
+    20,
+  );
+  assert.match(sameDay, /  09:10→10:02  /);
+  const syslog = renderText(
+    { lines: 2, folded: 0, signatures: [{ ...base, firstSeen: 'Aug 15 23:10:00', lastSeen: 'Aug 16 01:02:00' }] },
+    20,
+  );
+  assert.match(syslog, /Aug 15 23:10→Aug 16 01:02/);
+});
+
+test('header shape: N signatures · M lines (K folded)', async () => {
+  const result = await cluster(['ERROR a', '    at foo', 'ERROR b']);
+  const text = renderText(result, 20);
+  assert.equal(text.split('\n')[0], '2 signatures · 3 lines (1 folded)');
+  const noFold = renderText(await cluster(['ERROR a']), 20);
+  assert.equal(noFold.split('\n')[0], '1 signatures · 1 lines');
+});
+
+test('strips kubectl --prefix pod tags and records the first-seen pod', async () => {
+  const result = await cluster([
+    '[pod/api-7f9/app] 2026-08-16T09:00:00Z ERROR db timeout host=10.0.0.1',
+    '[pod/api-7f9/app]     at foo',
+    '[pod/api-c21/app] 2026-08-16T09:01:00Z ERROR db timeout host=10.0.0.2',
+  ]);
+  assert.equal(result.signatures.length, 1);
+  assert.equal(result.signatures[0].count, 2);
+  assert.equal(result.folded, 1);
+  assert.equal(result.signatures[0].source, 'api-7f9');
+  assert.match(renderText(result, 20), /\n  ↳ \[api-7f9\] db timeout host=10\.0\.0\.1/);
 });
