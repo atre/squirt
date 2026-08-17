@@ -27,8 +27,11 @@ Triage flow:
    Or grab its id from the digest (`#a3f1`) and `squirt … --show a3f1` to dump the raw lines behind it.
 3. "What changed since the deploy?" — `squirt diff before.log after.log`, or
    `squirt snap pre` before / `squirt diff pre` after (scoped to cwd, `--scope` to override).
-4. Machine-readable: `--json` (schema in README). CI gate: `--fail-on error` exits 1 if any
-   visible signature is ERROR or worse.
+4. Machine-readable: `--json` (schema in README); `--format md` wraps the digest in a fence
+   for pasting. CI gate: `--fail-on error` exits 1 if any visible signature is ERROR or worse
+   (usage errors exit 2).
+5. Human reading? `--wide` unclips samples (2000 chars); `--no-sample` drops the ↳ line;
+   `--show <id> --limit <n>` caps the raw-line dump (default 20).
 
 ## Reading the digest
 

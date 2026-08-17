@@ -63,14 +63,19 @@ test('the generated guard script is valid bash and rewrites/blocks as designed',
     await import('node:fs/promises').then((fs) => fs.writeFile(scriptPath, GUARD_SCRIPT, { mode: 0o755 }));
     assert.doesNotThrow(() => execFileSync('bash', ['-n', scriptPath]));
 
-    const rewrite = execFileSync('bash', [scriptPath], { input: JSON.stringify({ tool_input: { command: 'kubectl logs pod/x' } }) }).toString();
-    assert.equal(JSON.parse(rewrite).hookSpecificOutput.updatedInput.command, 'kubectl logs pod/x | squirt');
+    // SQUIRT_HOME → tmp so the test never touches the real ~/.squirt/guard.log
+    const env = { ...process.env, SQUIRT_HOME: tmp };
+    const run = (command: string): string =>
+      execFileSync('bash', [scriptPath], { input: JSON.stringify({ tool_input: { command } }), env }).toString();
 
-    assert.throws(() => execFileSync('bash', [scriptPath], { input: JSON.stringify({ tool_input: { command: 'kubectl logs -f pod/x' } }) }));
+    assert.equal(JSON.parse(run('kubectl logs pod/x')).hookSpecificOutput.updatedInput.command, 'kubectl logs pod/x | squirt');
+    assert.throws(() => run('kubectl logs -f pod/x'));
+    assert.equal(run('kubectl logs pod/x | head'), '');
 
-    const passthrough = execFileSync('bash', [scriptPath], { input: JSON.stringify({ tool_input: { command: 'kubectl logs pod/x | head' } }) })
-      .toString();
-    assert.equal(passthrough, '');
+    const log = await import('node:fs/promises').then((fs) => fs.readFile(join(tmp, 'guard.log'), 'utf8'));
+    assert.match(log, /Z rewrite kubectl logs pod\/x\n/);
+    assert.match(log, /Z block kubectl logs -f pod\/x\n/);
+    assert.deepEqual(guardStats(log, 0), { total: 2, rewritten: 1, blocked: 1 });
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -80,8 +85,9 @@ test('the generated guard script is valid bash and rewrites/blocks as designed',
 
 test('guardStats counts guard.log entries at or after a cutoff', () => {
   const log = '2026-08-15T10:00:00Z kubectl logs x\n2026-08-01T10:00:00Z docker logs y\n';
-  assert.equal(guardStats(log, Date.parse('2026-08-10T00:00:00Z')), 1);
-  assert.equal(guardStats('', Date.parse('2026-08-10T00:00:00Z')), 0);
+  // legacy lines (no kind) count as blocks
+  assert.deepEqual(guardStats(log, Date.parse('2026-08-10T00:00:00Z')), { total: 1, rewritten: 0, blocked: 1 });
+  assert.equal(guardStats('', Date.parse('2026-08-10T00:00:00Z')).total, 0);
 });
 
 test('parseDuration parses <n>[smhd]', () => {

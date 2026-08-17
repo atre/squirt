@@ -5,7 +5,7 @@ import { join } from 'node:path';
 // PreToolUse(Bash) guard: rewrites raw `kubectl logs` / `docker logs` /
 // `journalctl` into `… | squirt` instead of blocking — a block is a wasted
 // round-trip. Only blocks when a rewrite would be unsafe (-f/--follow,
-// already piped/redirected elsewhere), and logs blocks to guard.log for
+// already piped/redirected elsewhere), and logs rewrites + blocks to guard.log for
 // `squirt guard-stats`. Built as an array (not a template literal) because
 // the script itself contains backtick and `${...}` sequences that would
 // collide with JS template syntax.
@@ -25,11 +25,13 @@ const GUARD_SCRIPT_LINES = [
   'echo "$CMD" | grep -qE \'>[[:space:]]*[^&]\' && exit 0   # redirected to a file, not into context',
   'if echo "$CMD" | grep -qE \'(^|[[:space:]])(-f|--follow)([[:space:]]|$)|;|&&|\\|\\|\'; then',
   '  mkdir -p "${SQUIRT_HOME:-$HOME/.squirt}"',
-  '  echo "$(date -u +%FT%TZ) $CMD" >> "${SQUIRT_HOME:-$HOME/.squirt}/guard.log"',
+  '  echo "$(date -u +%FT%TZ) block $CMD" >> "${SQUIRT_HOME:-$HOME/.squirt}/guard.log"',
   '  echo "raw log dump blocked — pipe through squirt (e.g. \\`… | squirt --level warn\\`, or \\`squirt k8s -n <ns> deploy/<x> --since 1h\\`); narrow with --grep/--sample. No -f/--follow into context. Small --tail N / grep / head / file redirect are fine." >&2',
   '  exit 2',
   'fi',
   'NEW="$CMD | squirt"',
+  'mkdir -p "${SQUIRT_HOME:-$HOME/.squirt}"',
+  'echo "$(date -u +%FT%TZ) rewrite $CMD" >> "${SQUIRT_HOME:-$HOME/.squirt}/guard.log"',
   'printf \'%s\' "$INPUT" | jq -c --arg cmd "$NEW" \'{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",updatedInput:(.tool_input + {command:$cmd})}}\'',
   'exit 0',
 ];

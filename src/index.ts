@@ -56,8 +56,16 @@ function clusterOpts(flags: Flags): ClusterOptions {
 
 const noStdin = (files: string[]): boolean => files.length === 0 && Boolean(process.stdin.isTTY);
 
+class UsageError extends Error {}
+
 async function main(): Promise<void> {
-  const { command, files, passthrough, flags } = parseArgs(process.argv);
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs(process.argv);
+  } catch (err) {
+    throw new UsageError(err instanceof Error ? err.message : String(err));
+  }
+  const { command, files, passthrough, flags } = parsed;
 
   if (flags.help) return printHelp();
   if (flags.version) return printVersion();
@@ -73,7 +81,7 @@ async function main(): Promise<void> {
     const text = existsSync(logPath) ? await readFile(logPath, 'utf8') : '';
     const since = flags.since ?? '7d';
     const n = guardStats(text, Date.now() - parseDuration(since));
-    console.log(`${n} log dumps prevented (${since})`);
+    console.log(`${n.total} log dumps prevented (${since}) — ${n.rewritten} rewritten, ${n.blocked} blocked`);
     return;
   }
 
@@ -171,5 +179,6 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   console.error(`squirt: ${err instanceof Error ? err.message : String(err)}`);
-  process.exitCode = 1;
+  // 2 = usage error (bad flag/arg) so CI can tell it apart from --fail-on (1)
+  process.exitCode = err instanceof UsageError ? 2 : 1;
 });

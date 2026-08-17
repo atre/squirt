@@ -1,14 +1,27 @@
-/** Count guard.log lines ("<ISO ts> <command>") at or after `sinceMs`. */
-export function guardStats(logText: string, sinceMs: number): number {
-  let count = 0;
+export interface GuardStats {
+  /** rewritten + blocked */
+  total: number;
+  rewritten: number;
+  blocked: number;
+}
+
+/**
+ * Count guard.log lines at or after `sinceMs`. Line shape: `<ISO ts> rewrite|block <command>`;
+ * lines from older guards (`<ISO ts> <command>`, no kind) count as blocks.
+ */
+export function guardStats(logText: string, sinceMs: number): GuardStats {
+  const stats: GuardStats = { total: 0, rewritten: 0, blocked: 0 };
   for (const line of logText.split('\n')) {
     if (!line) continue;
     const space = line.indexOf(' ');
     if (space === -1) continue;
     const t = Date.parse(line.slice(0, space));
-    if (!Number.isNaN(t) && t >= sinceMs) count++;
+    if (Number.isNaN(t) || t < sinceMs) continue;
+    stats.total++;
+    if (line.startsWith('rewrite ', space + 1)) stats.rewritten++;
+    else stats.blocked++;
   }
-  return count;
+  return stats;
 }
 
 const DURATION_RE = /^(\d+)([smhd])$/;

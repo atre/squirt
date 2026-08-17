@@ -35,7 +35,7 @@ squirt snap pre-deploy < before.log               # save a baseline (scoped to c
 squirt diff pre-deploy < after.log                # compare against it
 
 squirt init --claude                              # install the log-dump guard hook (rewrites raw kubectl/docker/journalctl to `… | squirt`)
-squirt guard-stats                                # N log dumps prevented, last 7d
+squirt guard-stats                                # N log dumps prevented (rewritten/blocked), last 7d
 ```
 
 Output:
@@ -100,7 +100,7 @@ Output:
 | `--fuzzy` | merge near-duplicate templates (same level, ≤2 tokens differ) |
 | `--show <id>` | dump the raw lines behind one signature id (see `--limit`) |
 | `--limit <n>` | max raw lines for `--show` (default 20) |
-| `--fail-on <lvl>` | exit 1 if any visible signature is at this severity or worse |
+| `--fail-on <lvl>` | exit 1 if any visible signature is at this severity or worse (usage errors exit 2, so CI can tell them apart) |
 | `--format <fmt>` | wrap text output in a fenced block: `md` (or `claude`, an alias) |
 | `--brief` | red-only digest, ≤10 lines, silent when nothing is at warn+ |
 | `-` | read stdin (can be mixed with files, once) |
@@ -142,8 +142,9 @@ Snapshots live in `~/.squirt/<scope>-<hash>/<name>.json` (`SQUIRT_HOME` override
 `journalctl` commands to `… | squirt` instead of letting a raw firehose land
 in context — it only blocks when a rewrite would be unsafe (`-f`/`--follow`,
 already piped/redirected elsewhere). Default installs to `./.claude/`;
-`--global` installs to `~/.claude/`. Blocked commands are logged to
-`~/.squirt/guard.log`; `squirt guard-stats [--since 7d]` reports how many.
+`--global` installs to `~/.claude/`. Every rewrite and block is logged to
+`~/.squirt/guard.log` (`<ts> rewrite|block <cmd>`); `squirt guard-stats [--since 7d]`
+reports how many dumps were prevented, split by kind.
 
 ## Library
 
