@@ -113,6 +113,7 @@ renamed or removed.
 ```jsonc
 {
   "lines": 8412, "folded": 96, "totalSignatures": 14,
+  "warning": "input looks like a markdown table, not a log — …", // absent unless input looks tabular
   "time": { "start": "…ISO…", "end": "…ISO…" },        // absent if no timestamps
   "signatures": [{                                     // top N, sorted
     "id": "a3f1",                                      // stable: sha1(`${level} ${template}`).slice(0,4)

@@ -24,6 +24,9 @@ const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 const POD_PREFIX = /^\[pod\/([^\/\]\s]+)(?:\/[^\]\s]+)?\]\s+/;
 // logfmt key=value token: bare word or a quoted string (escapes allowed).
 const KV_RE = /(\w[\w.-]*)=("(?:[^"\\]|\\.)*"|\S+)/;
+// Markdown table row: starts with `|`, ends with `|`, non-empty between —
+// matches header/data rows and the `|---|---|` separator row alike.
+const TABLE_ROW = /^\s*\|.+\|\s*$/;
 
 // Hard per-line cap: base64 dumps / minified stacks stay linear through masking.
 const MAX_LINE = 4000;
@@ -244,6 +247,7 @@ export async function cluster(
   const firstEpoch = new Map<string, number>();
   let total = 0;
   let folded = 0;
+  let tableRows = 0;
   let last: Signature | undefined;
   let lastWasJson = false;
   let time: TimeRange | undefined;
@@ -331,6 +335,7 @@ export async function cluster(
       throw new Error('input looks binary (NUL byte in first line) — refusing to digest');
     }
     if (raw.length > MAX_LINE) raw = `${raw.slice(0, MAX_LINE)}…`;
+    if (TABLE_ROW.test(raw)) tableRows++;
 
     let source = tagged.source;
     const podMatch = POD_PREFIX.exec(raw);
@@ -393,5 +398,8 @@ export async function cluster(
   const result: ClusterResult = { lines: total, folded, signatures };
   if (time) result.time = time;
   if (opts.show) result.shown = shown;
+  if (total >= 5 && tableRows / total >= 0.3) {
+    result.warning = 'input looks like a markdown table, not a log — dedup may have collapsed real per-row values (e.g. row ids) into placeholders';
+  }
   return result;
 }

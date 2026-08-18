@@ -37,6 +37,8 @@ export interface ClusterResult {
   time?: TimeRange;
   /** Raw lines behind `ClusterOptions.show`'s signature id, up to `showLimit`. */
   shown?: string[];
+  /** Set when the input looks like structured tabular data (e.g. a markdown table) rather than log lines — dedup may have collapsed real per-row differences. */
+  warning?: string;
 }
 
 /** A line with optional provenance (file basename, container…). */

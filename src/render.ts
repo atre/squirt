@@ -105,6 +105,7 @@ function pct(count: number, lines: number): string {
 function renderWith(result: ClusterResult, opts: RenderOptions, layout: Layout, note?: string): string {
   const { visible, total } = filterSignatures(result, opts);
   const out: string[] = [];
+  if (result.warning) out.push(`⚠ ${result.warning}`);
   const foldNote = result.folded ? ` (${result.folded} folded)` : '';
   const sigCount = visible.length === total ? `${total}` : `${visible.length}/${total}`;
   out.push(`${sigCount} signatures · ${result.lines} lines${foldNote}`);
@@ -162,12 +163,15 @@ export function renderText(result: ClusterResult, opts: RenderOptions | number):
 /** Red-only, ≤10 lines, `''` when nothing at WARN+ — for hooks/CI line budgets. `top` caps rows below the ceiling. */
 export function renderBrief(result: ClusterResult, top = 9): string {
   const { visible } = filterSignatures(result, { top: Infinity, level: 'WARN' });
-  if (visible.length === 0) return '';
-  const rows = visible.slice(0, Math.min(9, top)).map((sig) => {
+  if (visible.length === 0 && !result.warning) return '';
+  // A warning line eats one of the 10, so rows cap at 8 instead of 9.
+  const rowCap = result.warning ? 8 : 9;
+  const rows = visible.slice(0, Math.min(rowCap, top)).map((sig) => {
     const when = span(sig.firstSeen, sig.lastSeen);
     return `[${sig.level}] #${sig.id} ×${sig.count}${when ? `  ${when}` : ''}  ${sig.template}`;
   });
-  return [`${visible.length} signatures · ${result.lines} lines`, ...rows].join('\n');
+  const header = `${visible.length} signatures · ${result.lines} lines`;
+  return (result.warning ? [`⚠ ${result.warning}`, header] : [header]).concat(rows).join('\n');
 }
 
 export function renderJson(result: ClusterResult, opts: RenderOptions | number): string {
@@ -178,6 +182,7 @@ export function renderJson(result: ClusterResult, opts: RenderOptions | number):
       lines: result.lines,
       folded: result.folded,
       totalSignatures: total,
+      warning: result.warning,
       time: result.time ? { start: new Date(result.time.start).toISOString(), end: new Date(result.time.end).toISOString() } : undefined,
       signatures: visible.slice(0, o.top).map((s) => {
         const { hist: _hist, novel: _novel, ...rest } = s;

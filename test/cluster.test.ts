@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cluster } from '../src/cluster.js';
 import { mask } from '../src/mask.js';
-import { renderJson, renderText } from '../src/render.js';
+import { renderBrief, renderJson, renderText } from '../src/render.js';
 
 test('collapses repeated messages that differ only in variables', async () => {
   const result = await cluster([
@@ -268,6 +268,52 @@ test('caps huge single lines before masking', async () => {
 
 test('rejects binary input (NUL byte in the first line)', async () => {
   await assert.rejects(cluster(['\0\x01\x02 binary']), /looks binary/);
+});
+
+const MD_TABLE = [
+  '| id | name |',
+  '|----|----|',
+  '| 1 | apple |',
+  '| 2 | banana |',
+  '| 3 | cherry |',
+  '| 4 | date |',
+  '| 5 | elderberry |',
+  '| 6 | fig |',
+  '| 7 | grape |',
+  '| 8 | honeydew |',
+];
+
+const PLAIN_LOG = [
+  '2026-08-16T09:00:00Z ERROR db timeout host=10.0.0.1',
+  '2026-08-16T09:00:10Z ERROR db timeout host=10.0.0.2',
+  '2026-08-16T09:00:20Z WARN slow query 900ms',
+  '2026-08-16T09:00:30Z INFO served 42 requests',
+  '2026-08-16T09:00:40Z DEBUG tick',
+];
+
+test('flags markdown-table-shaped input with a low-confidence warning', async () => {
+  const table = await cluster(MD_TABLE);
+  assert.match(table.warning ?? '', /markdown table/);
+
+  const log = await cluster(PLAIN_LOG);
+  assert.equal(log.warning, undefined);
+});
+
+test('warning surfaces in renderText/renderJson/renderBrief, omitted when unset', async () => {
+  const table = await cluster(MD_TABLE);
+  const text = renderText(table, { top: 20 });
+  assert.match(text.split('\n')[0], /^⚠ .*markdown table/);
+
+  const json = JSON.parse(renderJson(table, { top: 20 }));
+  assert.match(json.warning, /markdown table/);
+
+  const brief = renderBrief(table);
+  assert.match(brief.split('\n')[0], /^⚠ .*markdown table/);
+  assert.ok(brief.split('\n').length <= 10, `got ${brief.split('\n').length} lines`);
+
+  const log = await cluster(PLAIN_LOG);
+  assert.doesNotMatch(renderText(log, { top: 20 }), /⚠/);
+  assert.ok(!('warning' in JSON.parse(renderJson(log, { top: 20 }))));
 });
 
 test('mask: sha256 prefix, short hex ids, base64 blobs, mid-message timestamps', () => {
