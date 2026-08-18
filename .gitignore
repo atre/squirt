@@ -4,3 +4,6 @@ test-dist/
 *.log
 .DS_Store
 .snuff/
+
+# Local dogfooding log (references private projects) — never commit
+FEEDBACK.md
