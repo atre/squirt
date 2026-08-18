@@ -166,7 +166,7 @@ Flags:
   -v, --version   version
 
 Examples:
-  kubectl logs -n scrap deploy/scraper --since=1h | squirt
+  kubectl logs -n myapp deploy/api --since=1h | squirt
   docker logs api 2>&1 | squirt --json --level warn
   squirt /var/log/app.log --top 10 --tokens 800
   squirt snap pre-deploy < before.log; squirt diff pre-deploy < after.log`);

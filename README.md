@@ -22,11 +22,11 @@ Or from source: `git clone … && cd squirt && npm install && npm link`.
 ## Usage
 
 ```
-kubectl logs -n scrap deploy/scraper --since=1h | squirt
+kubectl logs -n myapp deploy/api --since=1h | squirt
 docker logs api 2>&1 | squirt --json
 squirt /var/log/app.log --top 10 --level warn
 
-squirt k8s -n scrap deploy/scraper --since 1h     # runs kubectl logs (--prefix --timestamps --all-containers)
+squirt k8s -n myapp deploy/api --since 1h         # runs kubectl logs (--prefix --timestamps --all-containers)
 squirt docker api --since 1h                      # runs docker logs (stdout+stderr, --timestamps)
 squirt journal nginx --since -1h                  # runs journalctl -u nginx
 
