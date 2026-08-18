@@ -6,7 +6,7 @@ AI-session context — the digest IS the product; guard its compactness.
 
 ## Stack
 - TypeScript 5.x, Node ≥ 20, ESM only (`"type": "module"`)
-- No runtime npm deps so far (built-ins) — not a constraint; add one when it earns its keep
+- No runtime npm deps (built-ins only) — hard rule, see Rules below; deps-requiring features go in a sibling package (e.g. the MCP wrapper), not here
 - devDeps: typescript, @types/node
 
 ## Commands
