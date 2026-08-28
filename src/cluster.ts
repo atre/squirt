@@ -27,6 +27,10 @@ const KV_RE = /(\w[\w.-]*)=("(?:[^"\\]|\\.)*"|\S+)/;
 // Markdown table row: starts with `|`, ends with `|`, non-empty between —
 // matches header/data rows and the `|---|---|` separator row alike.
 const TABLE_ROW = /^\s*\|.+\|\s*$/;
+// Lambda `--log-type Tail` embeds the last 4KB of invocation logs as
+// base64 in a `LogResult` field — pure JSON or an `--output text`
+// tab-separated line alike.
+const LOG_RESULT_RE = /"LogResult"\s*:\s*"([A-Za-z0-9+/=]+)"/;
 
 // Hard per-line cap: base64 dumps / minified stacks stay linear through masking.
 const MAX_LINE = 4000;
@@ -49,6 +53,20 @@ const LEVEL_MAP: Record<string, Level> = {
 };
 
 export const SEVERITY: Record<Level, number> = { ERROR: 0, WARN: 1, OTHER: 2, INFO: 3, DEBUG: 4 };
+
+// CI/test-runner failure lines carry no ERROR/WARN token but are
+// unambiguous failure signals — consulted only when neither LEVEL_PREFIX
+// nor LEVEL_BODY_RE found an explicit level (parseText).
+const FAILURE_SHAPES: RegExp[] = [
+  /^FAIL\s+\S+/, // jest/vitest suite failure
+  /^\s*●\s+/, // jest bullet detail
+  /^Tests:\s+\d+ failed/, // jest summary
+  /^Test Suites:\s+\d+ failed/, // jest summary
+  /^FAILED\s/, // pytest
+  /^E\s{3,}/, // pytest assertion detail
+  /^not ok \d+/, // node --test
+  /^--- FAIL:/, // go test
+];
 
 // Time histogram: fixed bucket count, bucket width doubles (buckets merge
 // pairwise) whenever a timestamp lands past the end — constant memory per
@@ -92,6 +110,22 @@ function pick(obj: Record<string, unknown>, keys: string[]): unknown {
   return undefined;
 }
 
+// Lambda invoke-error JSON shape: {errorType, errorMessage, FunctionError,
+// stackTrace} — none of these are in parseJson's msg/err field lists, so
+// without this the whole object falls through to `message = raw`.
+function errorShapeFromObject(o: Record<string, unknown>): string | undefined {
+  const errorType = o.errorType;
+  const errorMessage = o.errorMessage;
+  const functionError = o.FunctionError;
+  const stackTrace = o.stackTrace;
+  if (typeof errorType === 'string' && typeof errorMessage === 'string') return `${errorType}: ${errorMessage}`;
+  if (typeof errorType === 'string') return errorType;
+  if (typeof errorMessage === 'string') return errorMessage;
+  if (typeof functionError === 'string') return `FunctionError ${functionError}`;
+  if (Array.isArray(stackTrace) && typeof stackTrace[0] === 'string') return stackTrace[0];
+  return undefined;
+}
+
 // JSON-lines (pino, bunyan, zap, logrus, slog, structlog…): trust the fields
 // instead of regex-guessing, and drop the envelope from the template. Also
 // handles pretty-printed objects joined across lines by the caller.
@@ -131,6 +165,13 @@ function parseJson(raw: string): Parsed | undefined {
 
   let message = typeof msg === 'string' ? msg : msg !== undefined ? JSON.stringify(msg) : '';
   if (errText && !message.includes(errText)) message = message ? `${message}: ${errText}` : errText;
+  if (level === 'OTHER') {
+    const errMsg = errorShapeFromObject(o);
+    if (errMsg) {
+      level = 'ERROR';
+      message = errMsg;
+    }
+  }
   // Nothing recognisable: fall back to the raw object so the line isn't lost.
   if (!message) message = raw;
   return { ts, level, message };
@@ -177,7 +218,30 @@ function parseText(raw: string): Parsed {
     const m = LEVEL_BODY_RE.exec(rest.slice(0, 120).toUpperCase());
     level = m ? LEVEL_MAP[m[1]] : 'OTHER';
   }
-  return { ts, level, message: rest };
+
+  let message = rest;
+  if (level === 'OTHER') {
+    if (FAILURE_SHAPES.some((re) => re.test(rest))) {
+      level = 'ERROR';
+    } else {
+      const braceIdx = rest.indexOf('{');
+      if (braceIdx !== -1) {
+        try {
+          const obj = JSON.parse(rest.slice(braceIdx));
+          if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+            const errMsg = errorShapeFromObject(obj as Record<string, unknown>);
+            if (errMsg) {
+              level = 'ERROR';
+              message = errMsg;
+            }
+          }
+        } catch {
+          // not JSON — leave level as OTHER
+        }
+      }
+    }
+  }
+  return { ts, level, message };
 }
 
 function tokenize(template: string): string[] {
@@ -271,7 +335,16 @@ export async function cluster(
     return idx;
   };
 
-  function handleRecord(raw: string, source: string | undefined): void {
+  function handleRecord(raw: string, source: string | undefined, prefix?: string): void {
+    if (!prefix) {
+      const lr = LOG_RESULT_RE.exec(raw);
+      if (lr) {
+        const decoded = Buffer.from(lr[1], 'base64').toString('utf8');
+        for (const dLine of decoded.split(/\r?\n/)) {
+          if (dLine.trim()) handleRecord(dLine, source, '[LogResult] ');
+        }
+      }
+    }
     // JSON-lines never emit stack-trace continuations; an indented line after a
     // JSON record is a new (pretty-printed) record, not a fold target.
     if (last && !lastWasJson && CONTINUATION.test(raw)) {
@@ -290,7 +363,8 @@ export async function cluster(
     lastWasJson = json !== undefined;
     const { ts, level, message } = json ?? logfmt ?? parseText(raw);
 
-    const template = mask(message, extraMasks).replace(/\s+/g, ' ').trim().slice(0, 200);
+    let template = mask(message, extraMasks).replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (prefix) template = `${prefix}${template}`.slice(0, 200);
     const key = `${level} ${template}`;
     const sample = message.trim().slice(0, sampleCap);
 

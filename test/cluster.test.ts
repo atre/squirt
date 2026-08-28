@@ -326,3 +326,80 @@ test('mask: sha256 prefix, short hex ids, base64 blobs, mid-message timestamps',
     'peer <ip> and [<ip>]:<n> and <ip> at <n>:<n>:<n> std::string',
   );
 });
+
+// --- 2026-08-28 feedback-round acceptance tests (plans/2026-08-28-ci-lambda-shapes.md) ---
+
+test('CI test-runner failure lines are classified ERROR, not OTHER', async () => {
+  const shapes = [
+    'FAIL src/app.test.ts',
+    'Tests:       1 failed, 4 passed, 5 total',
+    'Test Suites: 1 failed, 2 passed, 3 total',
+    'FAILED tests/test_thing.py::test_x - AssertionError',
+    'E       assert 1 == 2',
+    'not ok 1 - should work',
+    '--- FAIL: TestThing (0.00s)',
+    '  ● App renders without crashing',
+  ];
+  for (const line of shapes) {
+    // Each shape run as the sole line of its own stream — isolates the new
+    // FAILURE_SHAPES detection from the pre-existing CONTINUATION folding
+    // (a line starting with whitespace, like the jest "●" bullet, folds into
+    // whatever signature precedes it when one exists; that behaviour is
+    // unchanged and out of scope here).
+    const result = await cluster([line]);
+    assert.equal(result.signatures.length, 1, `expected one signature for: ${line}`);
+    assert.equal(result.signatures[0].level, 'ERROR', `expected ERROR level for: ${line}`);
+  }
+});
+
+test('Lambda invoke-error JSON with no "level" field is classified ERROR', async () => {
+  const result = await cluster([
+    '{"errorType":"Error","errorMessage":"boom","trace":["Error: boom","    at handler (/var/task/index.js:3:9)"]}',
+  ]);
+  assert.equal(result.signatures.length, 1);
+  assert.equal(result.signatures[0].level, 'ERROR');
+  assert.equal(result.signatures[0].template, 'Error: boom');
+});
+
+test('Lambda invoke-error JSON with only FunctionError is classified ERROR', async () => {
+  const result = await cluster(['{"FunctionError":"Unhandled","StatusCode":200}']);
+  assert.equal(result.signatures.length, 1);
+  assert.equal(result.signatures[0].level, 'ERROR');
+  assert.equal(result.signatures[0].template, 'FunctionError Unhandled');
+});
+
+test('embedded Lambda error JSON mid-line (aws --output text shape) is classified ERROR', async () => {
+  // A long tab-separated prefix pushes any literal "ERROR" text past the
+  // existing 120-char body-scan window — this is the exact shape reported in
+  // squirt/FEEDBACK.md 2026-08-26 (CodeBuild `--output text` line).
+  const longPrefix = `i-0abcdef1234567890\t2026-08-26T10:00:00.000Z\t${'x'.repeat(150)}\t`;
+  const line = `${longPrefix}{"errorType":"Runtime.HandlerError","errorMessage":"Cannot find module"}`;
+  const result = await cluster([line]);
+  assert.equal(result.signatures.length, 1);
+  assert.equal(result.signatures[0].level, 'ERROR');
+  assert.equal(result.signatures[0].template, 'Runtime.HandlerError: Cannot find module');
+});
+
+test('LogResult field is base64-decoded and re-clustered with a [LogResult] prefix', async () => {
+  const tail = [
+    'START RequestId: 1234 Version: $LATEST',
+    'ERROR Invoke Error {"errorType":"Error","errorMessage":"boom","trace":[]}',
+    'END RequestId: 1234',
+    'REPORT RequestId: 1234 Duration: 42.00 ms Billed Duration: 43 ms Memory Size: 128 MB Max Memory Used: 64 MB',
+  ].join('\n');
+  const b64 = Buffer.from(tail, 'utf8').toString('base64');
+  const record = `{"LogResult":"${b64}","ExecutedVersion":"$LATEST"}`;
+
+  const result = await cluster([record]);
+
+  const decodedError = result.signatures.find((s) => s.level === 'ERROR' && s.template.startsWith('[LogResult] '));
+  assert.ok(decodedError, 'expected a [LogResult]-prefixed ERROR signature decoded from LogResult');
+  assert.match(decodedError!.template, /Invoke Error/);
+
+  // The original record is still clustered — its base64 blob already gets
+  // masked to <b64> by the existing generic base64 mask rule (mask.ts), so
+  // this is a regression guard, not proof of new behaviour by itself.
+  const original = result.signatures.find((s) => s.template.includes('<b64>'));
+  assert.ok(original, 'expected the original LogResult record to mask its base64 value to <b64>');
+  assert.equal(original!.template.includes(b64), false);
+});

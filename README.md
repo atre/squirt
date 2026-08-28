@@ -65,7 +65,12 @@ Output:
 
 1. JSON lines (pino, zap, logrus, slog…): take `level`/`msg`/`time` from the
    object. Otherwise strip a leading timestamp (ISO, `[…]`, syslog — kept for
-   first/last-seen) and the leading level token.
+   first/last-seen) and the leading level token. CI failure lines
+   (jest/vitest, pytest, `node --test`, `go test`) and Lambda invoke-error
+   JSON (`errorType`/`errorMessage`/`FunctionError`/`stackTrace`, embedded
+   mid-line or standalone) also count as ERROR when nothing else gives them a
+   level. `LogResult` (Lambda `--log-type Tail`) is base64-decoded and its
+   lines re-clustered with a `[LogResult]` template prefix.
 2. Mask variables — uuids, urls, emails, quoted strings, paths, ips, hex ids,
    sha256/base64 blobs, mid-message timestamps, `key=value` (logfmt) values,
    numbers — so lines that differ only in data collapse into one template.

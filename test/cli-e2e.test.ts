@@ -90,3 +90,27 @@ test('e2e: guard-stats says where the log should be when tally has none', () => 
   assert.equal(r.status, 0);
   assert.match(r.stdout, /^no guard log at .*squirt-e2e-empty-home-does-not-exist/);
 });
+
+test('e2e: --level warn surfaces Jest/Lambda/LogResult signals that fold into OTHER today', () => {
+  // Mirrors squirt/FEEDBACK.md 2026-08-26: a CodeBuild integ-test log with a
+  // Jest failure summary, an `aws --output text` line embedding a Lambda
+  // error JSON, and a `--log-type Tail` LogResult record.
+  const tail = [
+    'START RequestId: abc Version: $LATEST',
+    'ERROR Invoke Error {"errorType":"Error","errorMessage":"boom"}',
+    'END RequestId: abc',
+  ].join('\n');
+  const b64 = Buffer.from(tail, 'utf8').toString('base64');
+  const longPrefix = `i-0abc\t2026-08-26T10:00:00Z\t${'x'.repeat(150)}\t`;
+  const input =
+    [
+      'Tests:       1 failed, 4 passed, 5 total',
+      `${longPrefix}{"errorType":"Runtime.HandlerError","errorMessage":"Cannot find module"}`,
+      `{"LogResult":"${b64}"}`,
+    ].join('\n') + '\n';
+
+  const r = run(['--level', 'warn'], input);
+  assert.match(r.stdout, /Tests:\s+1 failed/);
+  assert.match(r.stdout, /Runtime\.HandlerError: Cannot find module/);
+  assert.match(r.stdout, /\[LogResult\] .*Invoke Error/);
+});
