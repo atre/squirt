@@ -1,0 +1,12 @@
+node_modules/
+dist/
+test-dist/
+*.log
+.DS_Store
+.snuff/
+
+# Local dogfooding log (references private projects) — never commit
+FEEDBACK.md
+
+# Gameplan files (quote private FEEDBACK items; disposable after execution) — never commit
+plans/
