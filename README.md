@@ -65,7 +65,9 @@ Output:
 
 1. JSON lines (pino, zap, logrus, slog…): take `level`/`msg`/`time` from the
    object. Otherwise strip a leading timestamp (ISO, `[…]`, syslog — kept for
-   first/last-seen) and the leading level token. CI failure lines
+   first/last-seen) and the leading level token (`ERROR`, `[warn]`,
+   `level=info`, `app.ERROR:`, and the zerolog/cloudflared 3-letter forms
+   `INF`/`WRN`/`ERR`/`DBG`/`FTL`/`TRC`/`PNC`). CI failure lines
    (jest/vitest, pytest, `node --test`, `go test`) and Lambda invoke-error
    JSON (`errorType`/`errorMessage`/`FunctionError`/`stackTrace`, embedded
    mid-line or standalone) also count as ERROR when nothing else gives them a

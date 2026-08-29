@@ -6,14 +6,14 @@ import type { ClusterOptions, ClusterResult, Level, Signature, TaggedLine, TimeR
 // most app loggers) or syslog "Aug 16 09:18:00". Followed by separator junk.
 const TS_PREFIX =
   /^\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?|[A-Z][a-z]{2} {1,2}\d{1,2} \d{2}:\d{2}:\d{2})\]?[\s:|-]*/;
-const LEVEL_RE = /\b(FATAL|PANIC|CRITICAL|CRIT|ERROR|ERR|WARNING|WARN|INFO|DEBUG|TRACE)\b/;
+const LEVEL_RE = /\b(FATAL|FTL|PANIC|PNC|CRITICAL|CRIT|ERROR|ERR|WARNING|WARN|WRN|INFO|INF|DEBUG|DBG|TRACE|TRC)\b/;
 // Body-scan fallback may only assign ERROR/WARN family — "user asked for INFO"
 // is not an INFO line. INFO/DEBUG/TRACE come from a leading token or JSON field.
 const LEVEL_BODY_RE = /\b(FATAL|PANIC|CRITICAL|CRIT|ERROR|ERR|WARNING|WARN)\b/;
 // The level token when it is the leading decoration of the message:
-// "ERROR msg", "[error] msg", "level=info msg", "app.ERROR: msg", "INFO: msg".
+// "ERROR msg", "[error] msg", "level=info msg", "app.ERROR: msg", "INFO: msg", zerolog "INF msg".
 const LEVEL_PREFIX =
-  /^(?:\[?(?:level|lvl|severity)=)?[\[(]?(?:[\w.]+\.)?(FATAL|PANIC|CRITICAL|CRIT|ERROR|ERR|WARNING|WARN|INFO|DEBUG|TRACE)[\])]?:?\s+/i;
+  /^(?:\[?(?:level|lvl|severity)=)?[\[(]?(?:[\w.]+\.)?(FATAL|FTL|PANIC|PNC|CRITICAL|CRIT|ERROR|ERR|WARNING|WARN|WRN|INFO|INF|DEBUG|DBG|TRACE|TRC)[\])]?:?\s+/i;
 // Stack-trace bodies and wrapped lines attach to the signature above them
 // instead of polluting the digest with one-off "signatures".
 const CONTINUATION = /^(\s+\S|at |Caused by|Traceback|\.\.\.|File ")/;
@@ -40,16 +40,22 @@ const MAX_JSON_BUF = 200;
 
 const LEVEL_MAP: Record<string, Level> = {
   FATAL: 'ERROR',
+  FTL: 'ERROR',
   PANIC: 'ERROR',
+  PNC: 'ERROR',
   CRITICAL: 'ERROR',
   CRIT: 'ERROR',
   ERROR: 'ERROR',
   ERR: 'ERROR',
   WARNING: 'WARN',
   WARN: 'WARN',
+  WRN: 'WARN',
   INFO: 'INFO',
+  INF: 'INFO',
   DEBUG: 'DEBUG',
+  DBG: 'DEBUG',
   TRACE: 'DEBUG',
+  TRC: 'DEBUG',
 };
 
 export const SEVERITY: Record<Level, number> = { ERROR: 0, WARN: 1, OTHER: 2, INFO: 3, DEBUG: 4 };

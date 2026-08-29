@@ -403,3 +403,45 @@ test('LogResult field is base64-decoded and re-clustered with a [LogResult] pref
   assert.ok(original, 'expected the original LogResult record to mask its base64 value to <b64>');
   assert.equal(original!.template.includes(b64), false);
 });
+
+test('zerolog/cloudflared 3-letter leading level tokens win over body text', async () => {
+  const result = await cluster([
+    '2026-08-28T19:14:02Z INF |  ERROR: Allow outbound QUIC to 198.51.100.7:7844 blocked',
+    '2026-08-28T19:14:03Z INF Registered tunnel connection connIndex=0 location=fra01',
+    '2026-08-28T19:14:04Z WRN Failed to dial QUIC connection err="timeout"',
+    '2026-08-28T19:14:05Z ERR Connection terminated error="context canceled"',
+    '2026-08-28T19:14:06Z DBG heartbeat sent',
+    '2026-08-28T19:14:07Z FTL cannot bind port 8080',
+    '2026-08-28T19:14:08Z TRC frame received bytes=12',
+    '2026-08-28T19:14:09Z PNC goroutine deadlock',
+    '2026-08-28T19:14:10Z retrying after ERROR: dial tcp timeout',
+  ]);
+  const byTemplate = Object.fromEntries(result.signatures.map((s) => [s.template, s.level]));
+
+  // Leading INF wins over "ERROR:" in the body, and the token is stripped from the template.
+  const box = result.signatures.find((s) => s.template.includes('Allow outbound QUIC to <ip> blocked'));
+  assert.ok(box, 'box-drawing INF line present');
+  assert.equal(box.level, 'INFO');
+  assert.ok(!box.template.startsWith('INF'), `token not stripped: ${box.template}`);
+
+  assert.equal(byTemplate['Registered tunnel connection connIndex=<n> location=<v>'], 'INFO');
+  // WRN beats the err= in the body (body-scan alone filed this as ERROR).
+  assert.equal(byTemplate['Failed to dial QUIC connection err=<str>'], 'WARN');
+  assert.equal(byTemplate['Connection terminated error=<str>'], 'ERROR');
+  assert.equal(byTemplate['heartbeat sent'], 'DEBUG');
+  assert.equal(byTemplate['cannot bind port <n>'], 'ERROR');
+  assert.equal(byTemplate['frame received bytes=<n>'], 'DEBUG');
+  assert.equal(byTemplate['goroutine deadlock'], 'ERROR');
+  // Body-scan fallback unchanged for a line with no leading token.
+  assert.equal(byTemplate['retrying after ERROR: dial tcp timeout'], 'ERROR');
+});
+
+test('3-letter level strings resolve in JSON level fields', async () => {
+  const result = await cluster([
+    '{"level":"inf","msg":"tunnel up","time":"2026-08-28T19:14:02Z"}',
+    '{"level":"wrn","msg":"slow dial","time":"2026-08-28T19:14:03Z"}',
+  ]);
+  const byTemplate = Object.fromEntries(result.signatures.map((s) => [s.template, s.level]));
+  assert.equal(byTemplate['tunnel up'], 'INFO');
+  assert.equal(byTemplate['slow dial'], 'WARN');
+});
