@@ -90,6 +90,17 @@ export function shouldFail(result: ClusterResult, level: Level): boolean {
   return result.signatures.some((s) => SEVERITY[s.level] <= max);
 }
 
+/** First digest line: `<visible>[/<total>] signatures · [<kept>/]<scanned> lines[ (n folded)][ · HH:MM→HH:MM[Z]]` — kept/scanned only when --level/--grep is active, the window whenever a timestamp parsed. */
+export function renderHeader(result: ClusterResult, visible: Signature[], total: number, filtered: boolean): string {
+  const sigCount = visible.length === total ? `${total}` : `${visible.length}/${total}`;
+  const kept = visible.reduce((n, s) => n + s.count, 0);
+  const lines = filtered ? `${kept}/${result.lines}` : `${result.lines}`;
+  const foldNote = result.folded ? ` (${result.folded} folded)` : '';
+  const when = span(result.first, result.last);
+  const zone = when && /Z$/.test(result.last ?? '') ? 'Z' : '';
+  return `${sigCount} signatures · ${lines} lines${foldNote}${when ? ` · ${when}${zone}` : ''}`;
+}
+
 interface Layout {
   top: number;
   samples: 'all' | 'error' | 'none';
@@ -106,9 +117,7 @@ function renderWith(result: ClusterResult, opts: RenderOptions, layout: Layout, 
   const { visible, total } = filterSignatures(result, opts);
   const out: string[] = [];
   if (result.warning) out.push(`⚠ ${result.warning}`);
-  const foldNote = result.folded ? ` (${result.folded} folded)` : '';
-  const sigCount = visible.length === total ? `${total}` : `${visible.length}/${total}`;
-  out.push(`${sigCount} signatures · ${result.lines} lines${foldNote}`);
+  out.push(renderHeader(result, visible, total, opts.level !== undefined || opts.grep !== undefined));
 
   for (const sig of visible.slice(0, layout.top)) {
     const when = span(sig.firstSeen, sig.lastSeen);

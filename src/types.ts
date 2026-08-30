@@ -37,6 +37,9 @@ export interface ClusterResult {
   folded: number;
   signatures: Signature[];
   time?: TimeRange;
+  /** Raw timestamp of the earliest / latest timestamped line seen (epoch-ordered, printed as the source wrote it) — the window a digest actually covers. */
+  first?: string;
+  last?: string;
   /** Raw lines behind `ClusterOptions.show`'s signature id, up to `showLimit`. */
   shown?: string[];
   /** Set when the input looks like structured tabular data (e.g. a markdown table) rather than log lines — dedup may have collapsed real per-row differences. */

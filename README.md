@@ -41,13 +41,15 @@ squirt guard-stats                                # N log dumps prevented (rewri
 Output:
 
 ```
-14 signatures · 8,412 lines (96 folded)
+14 signatures · 8,412 lines (96 folded) · 09:00→10:02
 [ERROR] #a3f1 ×312 (4%)  09:14→10:02  ▁▁▂█▃▁▁▁▁▁  pg pool timeout connecting to <ip>
   ↳ pg pool timeout connecting to 10.0.3.4:5432
   ⤷ Caused by: ETIMEDOUT
 [WARN] #08c2 ×2,100 (25%)  09:00→10:02  ▅▆▅▅▄▆█▃▅▆  retry <n> of <n> for job <n>
 ...
 ```
+
+With `--level`/`--grep` the first line reads `2/14 signatures · 314/8,412 lines · 09:00→10:02` — signatures and lines kept/scanned plus the time window actually seen (`Z` = UTC input), so a `0/…` verdict carries its own coverage. Empty input adds `squirt: empty input (0 lines scanned)` on stderr (exit code unchanged).
 
 `squirt --show a3f1`: dump the raw lines behind one signature id (`--limit`, default 20).
 

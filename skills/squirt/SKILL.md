@@ -36,7 +36,7 @@ Triage flow:
 ## Reading the digest
 
 ```
-14 signatures · 8,412 lines (96 folded)
+14 signatures · 8,412 lines (96 folded) · 09:00→10:02
 [ERROR] #a3f1 ×312 (4%)  09:14→10:02  ▁▁▂█▃▁▁▁▁▁  pg pool timeout connecting to <ip>
   ↳ pg pool timeout connecting to 10.0.3.4:5432        ← sample (raw)
   ⤷ Caused by: ETIMEDOUT                                ← first root-cause line from the folded stack

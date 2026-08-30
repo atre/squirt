@@ -94,6 +94,7 @@ async function main(): Promise<void> {
   const copts = clusterOpts(flags);
   const digest = async (input: AsyncIterable<string | TaggedLine>): Promise<ClusterResult> => cluster(input, copts);
   const print = (result: ClusterResult): void => {
+    if (result.lines === 0) console.error('squirt: empty input (0 lines scanned)');
     if (flags.show) {
       const sig = result.signatures.find((s) => s.id === flags.show);
       if (!sig) {

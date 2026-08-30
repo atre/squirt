@@ -322,6 +322,8 @@ export async function cluster(
   let last: Signature | undefined;
   let lastWasJson = false;
   let time: TimeRange | undefined;
+  let firstTs: { ts: string; t: number } | undefined;
+  let lastTs: { ts: string; t: number } | undefined;
 
   const bucketOf = (t: number): number => {
     if (!time) time = { start: t, end: t, bucketMs: 1000 };
@@ -391,6 +393,8 @@ export async function cluster(
       sig.lastSeen = ts;
       const t = toEpoch(ts);
       if (t !== undefined) {
+        if (!firstTs || t < firstTs.t) firstTs = { ts, t };
+        if (!lastTs || t > lastTs.t) lastTs = { ts, t };
         if (!firstEpoch.has(key)) firstEpoch.set(key, t);
         const idx = bucketOf(t);
         (sig.hist ??= new Array<number>(HIST_BUCKETS).fill(0))[idx]++;
@@ -483,6 +487,10 @@ export async function cluster(
   );
   const result: ClusterResult = { lines: total, folded, signatures };
   if (time) result.time = time;
+  if (firstTs && lastTs) {
+    result.first = firstTs.ts;
+    result.last = lastTs.ts;
+  }
   if (opts.show) result.shown = shown;
   if (total >= 5 && tableRows / total >= 0.3) {
     result.warning = 'input looks like a markdown table, not a log — dedup may have collapsed real per-row values (e.g. row ids) into placeholders';

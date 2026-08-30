@@ -102,7 +102,7 @@ test('--level and --grep filter signatures; header shows visible/total', async (
   assert.equal(filterSignatures(result, { top: 20, level: 'WARN' }).visible.map((s) => s.level).join(), 'ERROR,WARN');
   assert.equal(filterSignatures(result, { top: 20, level: 'INFO' }).visible.length, 4); // ERROR WARN OTHER INFO
   assert.equal(filterSignatures(result, { top: 20, grep: /slow/ }).visible.length, 1);
-  assert.match(renderText(result, { top: 20, level: 'WARN' }), /^2\/5 signatures · 7 lines/);
+  assert.match(renderText(result, { top: 20, level: 'WARN' }), /^2\/5 signatures · 4\/7 lines · 09:00→09:01Z/);
   assert.equal(parseLevel('warning'), 'WARN');
   assert.throws(() => parseLevel('loud'), /--level expects/);
 });
@@ -188,7 +188,7 @@ test('stable signature ids: 4 hex chars, deterministic, shown in text and json',
   assert.match(result.signatures[0].id, /^[0-9a-f]{4}$/);
   const again = await cluster(LOG);
   assert.equal(again.signatures[0].id, result.signatures[0].id);
-  assert.match(renderText(result, { top: 20 }), /^\d+ signatures · \d+ lines\n\[ERROR\] #[0-9a-f]{4} ×3/);
+  assert.match(renderText(result, { top: 20 }), /^\d+ signatures · \d+ lines · 09:00→09:01Z\n\[ERROR\] #[0-9a-f]{4} ×3/);
   assert.match(JSON.parse(renderJson(result, { top: 20 })).signatures[0].id, /^[0-9a-f]{4}$/);
 });
 
@@ -332,4 +332,29 @@ test('snap: save + load under SQUIRT_HOME, scoped', async () => {
     else process.env.SQUIRT_HOME = prev;
     await rm(home, { recursive: true, force: true });
   }
+});
+
+// ── feedback round 2026-08-30: a clean verdict carries its coverage ──────
+
+test('header: filtered digests show kept/scanned lines and the time window actually seen', async () => {
+  const result = await cluster(LOG);
+  // ClusterResult.first/last: raw timestamp strings of the earliest/latest timestamped line (epoch-ordered).
+  const { first, last } = result as { first?: string; last?: string };
+  assert.equal(first, '2026-08-16T09:00:00Z');
+  assert.equal(last, '2026-08-16T09:01:00Z');
+  assert.match(renderText(result, { top: 20, level: 'WARN' }), /^2\/5 signatures · 4\/7 lines · 09:00→09:01Z\n/);
+  assert.match(renderText(result, { top: 20, grep: /slow/ }), /^1\/5 signatures · 1\/7 lines · 09:00→09:01Z\n/);
+  assert.match(renderText(result, { top: 20 }), /^5 signatures · 7 lines · 09:00→09:01Z\n/);
+  // no timestamps → no window; a filter that keeps nothing still shows the denominator
+  assert.equal(renderText(await cluster(['a', 'b', 'c']), { top: 20, level: 'WARN' }).split('\n')[0], '0/3 signatures · 0/3 lines');
+  // own zone: an offset timestamp gets no Z suffix
+  const local = await cluster(['2026-08-16T09:00:00+02:00 ERROR x', '2026-08-16T10:30:00+02:00 ERROR x']);
+  assert.match(renderText(local, { top: 20 }), /^1 signatures · 2 lines · 09:00→10:30\n/);
+  // out-of-order merged streams: the window is ordered by epoch, not by arrival
+  const ooo = (await cluster(['2026-08-16T10:00:00Z ERROR x', '2026-08-16T09:00:00Z ERROR x'])) as { first?: string; last?: string };
+  assert.equal(ooo.first, '2026-08-16T09:00:00Z');
+  assert.equal(ooo.last, '2026-08-16T10:00:00Z');
+  // --brief is unchanged: silent when clean, terse header when red
+  const { renderBrief } = await import('../src/render.js');
+  assert.match(renderBrief(await cluster(LOG)), /^2 signatures · 7 lines\n/);
 });

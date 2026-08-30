@@ -114,3 +114,19 @@ test('e2e: --level warn surfaces Jest/Lambda/LogResult signals that fold into OT
   assert.match(r.stdout, /Runtime\.HandlerError: Cannot find module/);
   assert.match(r.stdout, /\[LogResult\] .*Invoke Error/);
 });
+
+// ── feedback round 2026-08-30 ──────────────────────────────────────────
+
+test('e2e: empty input says so on stderr, exit 0, stdout unchanged', () => {
+  const r = run([], '');
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '0 signatures · 0 lines\n');
+  assert.equal(r.stderr, 'squirt: empty input (0 lines scanned)\n');
+  const j = run(['--json'], '');
+  assert.equal(JSON.parse(j.stdout).lines, 0);
+  assert.equal(j.stderr, 'squirt: empty input (0 lines scanned)\n');
+  // non-empty input with a filter that keeps nothing: denominator on stdout, nothing on stderr
+  const ok = run(['--level', 'warn'], 'INFO a\n');
+  assert.equal(ok.stderr, '');
+  assert.equal(ok.stdout, '0/1 signatures · 0/1 lines\n');
+});
